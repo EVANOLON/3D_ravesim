@@ -1,0 +1,49 @@
+# Build artifacts
+build*/
+target/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# IDE
+.vscode/
+.claude/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large data files
+*.npy
+*.h5
+*.pptx
+*.docx
+
+# Simulation output
+output/
+
+# Jupyter checkpoints
+**/.ipynb_checkpoints/
+
+# Old version backups
+big-fourier *修改前/
+fast-wave -*/
+fast-wave-*/
+修改文件夹/
+
+# Notebook backup copies
+**/*-Copy*.ipynb
+**/*checkpoint*.ipynb
+
+# Experiment output text files
+notebooks/**/*.txt
+grid/**/*.txt
+grid/260208-full/
+post-processing/*.txt
+
+# Old backup test files (top-level)
+/test/
+
+# Images (experiment result figures)
+*.png
