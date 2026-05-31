@@ -4,7 +4,7 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/EVANOLON/3D_ravesim)
 ![License](https://img.shields.io/github/license/EVANOLON/3D_ravesim)
 
-RAVE-SIM is an X-ray wave propagation simulation framework developed at ETH Zurich, published in **Optics Express** ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings, samples) and free-space propagation to a detector.
+RAVE-SIM is an X-ray wave propagation simulation framework developed at ETH Zurich, published in **Optics Express** ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings, samples) and free-space propagation to a detector. I added 3D calculation mode to it.
 
 ## Features
 
