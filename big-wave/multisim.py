@@ -331,15 +331,24 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
     max_x: float
     z_source: float
 
-    assert (
-        sim_params.N * sim_params.dx >= sim_params.detector_size
-    ), f"Detector is bigger than simulation space ({sim_params.detector_size} > {sim_params.N * sim_params.dx})."
+    # Check if Fresnel scaling is enabled (skip FOV assertions + Nyquist checks)
+    use_fresnel = dct["sim_params"].get("use_fresnel_scaling", False)
+    if isinstance(use_fresnel, str):
+        use_fresnel = use_fresnel.lower() == "true"
 
-    if sim_params.is_2d:
-        assert sim_params.nx * sim_params.dx >= sim_params.get_detector_size_x(), \
-            f"2D detector x-size exceeds simulation x-extent"
-        assert sim_params.ny * sim_params.get_dy() >= sim_params.get_detector_size_y(), \
-            f"2D detector y-size exceeds simulation y-extent"
+    if not use_fresnel:
+        assert (
+            sim_params.N * sim_params.dx >= sim_params.detector_size
+        ), f"Detector is bigger than simulation space ({sim_params.detector_size} > {sim_params.N * sim_params.dx})."
+
+        if sim_params.is_2d:
+            assert sim_params.nx * sim_params.dx >= sim_params.get_detector_size_x(), \
+                f"2D detector x-size exceeds simulation x-extent"
+            assert sim_params.ny * sim_params.get_dy() >= sim_params.get_detector_size_y(), \
+                f"2D detector y-size exceeds simulation y-extent"
+    else:
+        logger.info("Fresnel scaling enabled, simulation FOV at sample plane does not need to "
+                     f"cover physical detector ({sim_params.N * sim_params.dx*1e3:.2f}mm vs {sim_params.detector_size*1e3:.1f}mm)")
 
     materials = collect_all_materials(elements)
 
@@ -367,14 +376,17 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
         # has the shortest wavelength and is thus more likely to run into Nyquist
         # issues.
         wl_e_max = convert_energy_wavelength(energy_range[1])
-        grid_density_check(
-            first_z - z_source, x_range[0], Nx, sim_params.dx, wl_e_max
-        )
-        grid_density_check(
-            first_z - z_source, x_range[1], Nx, sim_params.dx, wl_e_max
-        )
+        if not use_fresnel:
+            grid_density_check(
+                first_z - z_source, x_range[0], Nx, sim_params.dx, wl_e_max
+            )
+            grid_density_check(
+                first_z - z_source, x_range[1], Nx, sim_params.dx, wl_e_max
+            )
+        else:
+            logger.info("Fresnel scaling enabled, skipping source→sample Nyquist check")
 
-        if sim_params.is_2d:
+        if sim_params.is_2d and not use_fresnel:
             from propagation import grid_density_check_2d
             grid_density_check_2d(
                 first_z - z_source, x_range[0], sim_params.nx, sim_params.dx,
@@ -492,26 +504,39 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
 
     z_distances = [el.z_start for el in elements]
     element_heights = [el.get_thickness() for el in elements]
-    angles, max_x_list = compute_cutoff_angles(
-        detector_size=sim_params.detector_size,
-        dx=sim_params.dx,
-        energy_range=energy_range,
-        z_source=z_source,
-        z_distances=z_distances,
-        element_heights=element_heights,
-        z_detector=sim_params.z_detector,
-        max_x=max_x,
-    )
+    if use_fresnel:
+        # Fresnel scaling: use a simple geometric cutoff based on the
+        # sample->detector geometry (not the source->detector full angle).
+        # The angular bandwidth at the sample plane is much narrower.
+        sample_half_size = max(abs(x_range[0]), abs(x_range[1]))
+        cutoff_angle = float(np.arctan(
+            (sim_params.detector_size / 2 + sample_half_size) / sim_params.z_detector
+        ))
+        angles = [cutoff_angle] * (len(elements) + 1)
+        max_x_list = [sim_params.detector_size / 2] * (len(elements) + 1)
+        logger.info(f"Fresnel mode: simple cutoff angle={cutoff_angle:.4f} rad")
+    else:
+        angles, max_x_list = compute_cutoff_angles(
+            detector_size=sim_params.detector_size,
+            dx=sim_params.dx,
+            energy_range=energy_range,
+            z_source=z_source,
+            z_distances=z_distances,
+            element_heights=element_heights,
+            z_detector=sim_params.z_detector,
+            max_x=max_x,
+        )
 
     # Maximal absolute x coordinate at z_detector where rays should appear according to the cutoff angles
     max_x = max_x_list[-1]
-    # size of the simulation such that no rays should reflect at all when using the computed cutoff angles.
-    required_Nx = int(np.ceil(max_x / sim_params.dx) * 2)
-    #3d adjustment start
-    assert (
-        Nx >= required_Nx
-    ), f"Reflections at the boundary might occur: Nx={Nx}, required_Nx={required_Nx}, max_x={max_x}, dx={sim_params.dx}"
-    #3d adjustment end
+    if not use_fresnel:
+        # size of the simulation such that no rays should reflect at all when using the computed cutoff angles.
+        required_Nx = int(np.ceil(max_x / sim_params.dx) * 2)
+        #3d adjustment start
+        assert (
+            Nx >= required_Nx
+        ), f"Reflections at the boundary might occur: Nx={Nx}, required_Nx={required_Nx}, max_x={max_x}, dx={sim_params.dx}"
+        #3d adjustment end
 
 
     # assert (

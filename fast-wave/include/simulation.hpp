@@ -52,6 +52,7 @@ struct Config {
     std::unique_ptr<Source> source;
     DType dtype;
     bool save_final_u_vectors;
+    bool save_debug_wavefields;  ///< Save intermediate full wavefields (wave_after_source, wave_before_sample, etc.); disabled by default for large 2D data
     std::vector<double> cutoff_angles;
 };
 
@@ -65,6 +66,20 @@ struct Config {
 
 [[nodiscard]] inline double convert_cutoff_angle_to_frequency(double angle, double wl) {
     return std::sin(angle) / wl;
+}
+
+/// Compute Fresnel scaling parameters for short source-sample distance.
+inline void compute_fresnel_params(double z_src, double z_sample, double z_det,
+                                    double &z_eff, double &M) {
+    const double z_s = z_sample - z_src;
+    const double z_d = z_det - z_sample;
+    if (z_s <= 0.0 || z_d <= 0.0) {
+        z_eff = z_d;
+        M = 1.0;
+        return;
+    }
+    z_eff = (z_s * z_d) / (z_s + z_d);
+    M = (z_s + z_d) / z_s;
 }
 
 /// Given an energy in eV, calculate the wavelength in metres or vice versa

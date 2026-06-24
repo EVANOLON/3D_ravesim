@@ -32,10 +32,13 @@ __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams par
                                               DevComplex<double> *d_deltabetas,
                                               int z_slice_index, double x_position, double y_position);
 template <typename S>
-__global__ void square_and_downsample_2d_kernel(DevComplex<S> *d_u, int nx, int ny, S *d_out, 
+__global__ void square_and_downsample_2d_kernel(DevComplex<S> *d_u, int nx, int ny, S *d_out,
                               int outsize_x, int outsize_y,
                               double detector_pixel_size_x, double detector_pixel_size_y,
                               double current_z, double dx, double dy);
+template <typename S>
+__global__ void initialize_uniform_2d_kernel(DevComplex<S> *d_u, int nx, int ny,
+                                              DevComplex<S> value);
 //3d end
 template <typename S>
 __global__ void apply_grating_factors_kernel(DevComplex<S> *d_u, SimParams params,

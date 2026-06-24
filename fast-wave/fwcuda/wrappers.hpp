@@ -25,10 +25,12 @@ void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double
                             std::size_t x_len, std::size_t y_len, DevComplex<double> *d_deltabetas,
                             int z_slice_index, double x_position, double y_position);
 template <typename S>
-void square_and_downsample_2d(DevComplex<S> *d_u, int nx, int ny, S *d_out, 
+void square_and_downsample_2d(DevComplex<S> *d_u, int nx, int ny, S *d_out,
                               int outsize_x, int outsize_y,
                               double detector_pixel_size_x, double detector_pixel_size_y,
                               double current_z, double dx, double dy);
+template <typename S>
+void initialize_uniform_2d(DevComplex<S> *d_u, int nx, int ny, Complex<S> value);
 //3d end
 template <typename S>
 void apply_grating_factors(DevComplex<S> *d_u, const SimParams &params, Complex<S> factor_a,

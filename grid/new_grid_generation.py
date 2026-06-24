@@ -317,3 +317,254 @@ def stair(n: int, depth: float) -> np.ndarray:
                 base = np.hstack((base, void))
         total = np.vstack((total, base))
     return total
+
+
+def _sph_harm(l: int, m: int, theta: float, phi: float) -> float:
+    """Evaluate real spherical harmonic Y_l^m(theta, phi) without scipy.
+
+    Uses the associated Legendre polynomial recurrence for l <= 4.
+    For higher l, prefer scipy.special.sph_harm.
+
+    Parameters
+    ----------
+    l : int
+        Degree (l >= 0).
+    m : int
+        Order (|m| <= l).
+    theta : float
+        Polar angle from z-axis [0, pi].
+    phi : float
+        Azimuthal angle [0, 2pi).
+    """
+    from math import sqrt, cos, sin, pi
+
+    N = {
+        (0, 0): sqrt(1.0 / (4 * pi)),
+        (1, -1): sqrt(3.0 / (8 * pi)),
+        (1, 0):  sqrt(3.0 / (4 * pi)),
+        (1, 1):  sqrt(3.0 / (8 * pi)),
+        (2, -2): sqrt(15.0 / (32 * pi)),
+        (2, -1): sqrt(15.0 / (8 * pi)),
+        (2, 0):  sqrt(5.0 / (16 * pi)),
+        (2, 1):  sqrt(15.0 / (8 * pi)),
+        (2, 2):  sqrt(15.0 / (32 * pi)),
+        (3, -3): sqrt(35.0 / (64 * pi)),
+        (3, -2): sqrt(105.0 / (32 * pi)),
+        (3, -1): sqrt(21.0 / (64 * pi)),
+        (3, 0):  sqrt(7.0 / (16 * pi)),
+        (3, 1):  sqrt(21.0 / (64 * pi)),
+        (3, 2):  sqrt(105.0 / (32 * pi)),
+        (3, 3):  sqrt(35.0 / (64 * pi)),
+        (4, -4): sqrt(315.0 / (512 * pi)),
+        (4, -3): sqrt(315.0 / (64 * pi)),
+        (4, -2): sqrt(45.0 / (128 * pi)),
+        (4, -1): sqrt(45.0 / (64 * pi)),
+        (4, 0):  sqrt(81.0 / (256 * pi)),
+        (4, 1):  sqrt(45.0 / (64 * pi)),
+        (4, 2):  sqrt(45.0 / (128 * pi)),
+        (4, 3):  sqrt(315.0 / (64 * pi)),
+        (4, 4):  sqrt(315.0 / (512 * pi)),
+    }
+
+    x = cos(theta)
+    s = sin(theta)
+
+    if l == 0:
+        P = 1.0
+    elif l == 1:
+        if m == -1: P = 0.5 * s
+        elif m == 0: P = x
+        elif m == 1: P = -s
+        else: raise ValueError(f"Invalid m={m} for l={l}")
+    elif l == 2:
+        s2 = s * s
+        if m == -2: P = 0.25 * s2
+        elif m == -1: P = 0.5 * x * s
+        elif m == 0:  P = 0.5 * (3 * x * x - 1)
+        elif m == 1:  P = -3 * x * s
+        elif m == 2:  P = 3 * s2
+        else: raise ValueError(f"Invalid m={m} for l={l}")
+    elif l == 3:
+        x2 = x * x; s2 = s * s
+        if m == -3: P = (1.0 / 8) * s2 * s
+        elif m == -2: P = (1.0 / 4) * x * s2
+        elif m == -1: P = (1.0 / 8) * s * (5 * x2 - 1)
+        elif m == 0:  P = 0.5 * x * (5 * x2 - 3)
+        elif m == 1:  P = -(3.0 / 2) * s * (5 * x2 - 1)
+        elif m == 2:  P = 15 * x * s2
+        elif m == 3:  P = -15 * s2 * s
+        else: raise ValueError(f"Invalid m={m} for l={l}")
+    elif l == 4:
+        x2 = x * x; s2 = s * s
+        if m == -4: P = (3.0 / 16) * s2 * s2
+        elif m == -3: P = (3.0 / 8) * x * s2 * s
+        elif m == -2: P = (3.0 / 8) * s2 * (7 * x2 - 1)
+        elif m == -1: P = (3.0 / 8) * x * s * (7 * x2 - 3)
+        elif m == 0:  P = (1.0 / 8) * (35 * x2 * x2 - 30 * x2 + 3)
+        elif m == 1:  P = -(5.0 / 2) * s * (7 * x2 * x - 3 * x)
+        elif m == 2:  P = (15.0 / 2) * s2 * (7 * x2 - 1)
+        elif m == 3:  P = -105 * x * s2 * s
+        elif m == 4:  P = 105 * s2 * s2
+        else: raise ValueError(f"Invalid m={m} for l={l}")
+    else:
+        raise ValueError(f"l={l} > 4 not supported without scipy; "
+                         "install scipy and use scipy.special.sph_harm")
+
+    norm = N.get((l, m))
+    if norm is None:
+        raise ValueError(f"No pre-computed norm for l={l}, m={m}; l <= 4 only")
+
+    if m == 0:
+        return norm * P
+    elif m > 0:
+        return norm * P * cos(m * phi) * sqrt(2.0)
+    else:
+        return norm * P * sin(abs(m) * phi) * sqrt(2.0)
+
+
+def non_spherical_solid(base_radius: float, l: int, m: int, epsilon: float,
+                        scale_x: float, scale_y: float, scale_z: float,
+                        dtype: np.dtype = np.uint32) -> np.ndarray:
+    """Generate a 3D solid bounded by a spherical-harmonic surface.
+
+    The surface radius at each angle is:
+        r(theta, phi) = base_radius * (1 + eps * Y_l^m(theta, phi))
+
+    Voxels inside r(theta, phi) are set to 1, outside to 0.
+    """
+    max_radius = base_radius * (1 + abs(epsilon))
+    len_x = int(math.ceil(max_radius / scale_x * 2))
+    len_y = int(math.ceil(max_radius / scale_y * 2))
+    len_z = int(math.ceil(max_radius / scale_z * 2))
+    arr = np.zeros((len_z, len_y, len_x), dtype=dtype)
+
+    cx, cy, cz = len_x / 2, len_y / 2, len_z / 2
+
+    for iz in range(len_z):
+        z = (iz - cz) * scale_z
+        for iy in range(len_y):
+            y = (iy - cy) * scale_y
+            for ix in range(len_x):
+                x = (ix - cx) * scale_x
+                r = math.sqrt(x * x + y * y + z * z)
+                if r == 0:
+                    if base_radius > 0:
+                        arr[iz, iy, ix] = 1
+                    continue
+
+                theta = math.acos(z / r)
+                phi = math.atan2(y, x)
+
+                r_surface = base_radius * (1 + epsilon * _sph_harm(l, m, theta, phi))
+                if r <= r_surface:
+                    arr[iz, iy, ix] = 1
+    return arr
+
+
+def non_spherical_shell(base_radius: float, thickness: float, l: int, m: int, epsilon: float,
+                        scale_x: float, scale_y: float, scale_z: float,
+                        dtype: np.dtype = np.uint32) -> np.ndarray:
+    """Generate a 3D shell bounded by inner/outer spherical-harmonic surfaces.
+
+    Inner surface: r(theta, phi) = base_radius * (1 + eps * Y_l^m(theta, phi))
+    Outer surface: inner + thickness (constant along radial direction; the shell
+    has uniform angular thickness).
+
+    Voxels between the two surfaces are set to 1, outside to 0.
+    """
+    max_radius = (base_radius + thickness) * (1 + abs(epsilon))
+    len_x = int(math.ceil(max_radius / scale_x * 2))
+    len_y = int(math.ceil(max_radius / scale_y * 2))
+    len_z = int(math.ceil(max_radius / scale_z * 2))
+    arr = np.zeros((len_z, len_y, len_x), dtype=dtype)
+
+    cx, cy, cz = len_x / 2, len_y / 2, len_z / 2
+
+    for iz in range(len_z):
+        z = (iz - cz) * scale_z
+        for iy in range(len_y):
+            y = (iy - cy) * scale_y
+            for ix in range(len_x):
+                x = (ix - cx) * scale_x
+                r = math.sqrt(x * x + y * y + z * z)
+                if r == 0:
+                    continue
+
+                theta = math.acos(z / r)
+                phi = math.atan2(y, x)
+
+                r_inner = base_radius * (1 + epsilon * _sph_harm(l, m, theta, phi))
+                r_outer = r_inner + thickness
+
+                if r_inner <= r <= r_outer:
+                    arr[iz, iy, ix] = 1
+    return arr
+
+
+def non_spherical_shell_variable_thickness(
+    base_radius: float, thickness0: float, l: int, m: int,
+    epsilon_r: float, epsilon_t: float,
+    scale_x: float, scale_y: float, scale_z: float,
+    dtype: np.dtype = np.uint32
+) -> np.ndarray:
+    """Generate a 3D shell where both the mean radius AND thickness vary
+    independently with spherical harmonics.
+
+    Inner surface: r_in(theta, phi) = base_radius * (1 + eps_r * Y_l^m(theta, phi))
+    Outer surface: r_out(theta, phi) = (base_radius + thickness0) * (1 + eps_t * Y_l^m(theta, phi))
+
+    This allows independent control of the outer shape (eps_t) and inner
+    cavity shape (eps_r), including pure offset, pure squash, or both.
+    """
+    r_out_mean = base_radius + thickness0
+    max_r_in = base_radius * (1 + abs(epsilon_r))
+    max_r_out = r_out_mean * (1 + abs(epsilon_t))
+    max_radius = max(max_r_in, max_r_out)
+
+    len_x = int(math.ceil(max_radius / scale_x * 2))
+    len_y = int(math.ceil(max_radius / scale_y * 2))
+    len_z = int(math.ceil(max_radius / scale_z * 2))
+    arr = np.zeros((len_z, len_y, len_x), dtype=dtype)
+
+    cx, cy, cz = len_x / 2, len_y / 2, len_z / 2
+
+    for iz in range(len_z):
+        z = (iz - cz) * scale_z
+        for iy in range(len_y):
+            y = (iy - cy) * scale_y
+            for ix in range(len_x):
+                x = (ix - cx) * scale_x
+                r = math.sqrt(x * x + y * y + z * z)
+                if r == 0:
+                    continue
+
+                theta = math.acos(z / r)
+                phi = math.atan2(y, x)
+
+                Y = _sph_harm(l, m, theta, phi)
+
+                r_in = base_radius * (1 + epsilon_r * Y)
+                r_out = r_out_mean * (1 + epsilon_t * Y)
+
+                if r_in < r_out:
+                    if r_in <= r <= r_out:
+                        arr[iz, iy, ix] = 1
+                else:
+                    pass
+    return arr
+
+
+def _sph_harm_2d_analytic(l: int, phi: float) -> float:
+    """Real Fourier-mode basis on the circle: cos(l*phi) / sin(l*phi).
+
+    For 2D the 'spherical harmonics' reduce to Fourier modes on S^1.
+    The convention here uses cos(m*phi) for m >= 0 and sin(|m|*phi) for m < 0,
+    normalised such that integral Y^2 dphi = 1.
+    """
+    from math import sqrt, cos, sin, pi
+    if l > 0:
+        return cos(l * phi) * sqrt(2.0 / pi)
+    elif l < 0:
+        return sin(abs(l) * phi) * sqrt(2.0 / pi)
+    else:
+        return sqrt(1.0 / pi)

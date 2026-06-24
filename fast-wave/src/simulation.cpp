@@ -693,6 +693,10 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
     const std::size_t sim_size_bytes = sizeof(Complex<S>) * N;
     const std::size_t detector_size_bytes = sizeof(S) * nr_pixels;
     spdlog::info("GPU memory required for wavefield: {} MB", sim_size_bytes / (1024.0 * 1024.0));
+
+    // Fresnel scaling: local state (used before optical elements loop)
+    double fresnel_z_eff = 0.0;
+    double fresnel_M = 1.0;
     
     DevComplex<S> *d_u = nullptr;
     DevComplex<S> *d_U = nullptr;
@@ -748,15 +752,32 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
         const PointSource &point_source =
             *reinterpret_cast<const PointSource *>(config.source.get());
         double y_source = point_source.y.value_or(0.0);
-        // spdlog::info("[STEP 5] Calling propagate_analytically_2d...");
-         // 使用2D解析传播
-        propagate_analytically_2d<S>(d_u, config.sim_params, point_source.x, y_source, current_z);
-        // spdlog::info("[STEP 6] propagate_analytically_2d completed");
-        // spdlog::info("[STEP 7] Applying frequency cutoff via propagate_2d...");
-        // 应用频率截止
+
+        if (config.sim_params.use_fresnel_scaling) {
+            // Fresnel scaling: uniform plane wave (no spherical wave initialization)
+            spdlog::info("  Using Fresnel scaling (z_src={}, avoiding analytical propagation)",
+                        point_source.z);
+            initialize_uniform_2d<S>(d_u, nx, ny, Complex<S>{1.0, 0.0});
+
+            // Compute Fresnel parameters: z_eff and M
+            {
+                const double z_sample = current_z;  // first optical element z_start
+                compute_fresnel_params(point_source.z, z_sample,
+                                       config.sim_params.z_detector,
+                                       fresnel_z_eff, fresnel_M);
+            }
+            spdlog::info("  Fresnel params: z_eff={:.6e}, M={:.2f}x",
+                        fresnel_z_eff, fresnel_M);
+        } else {
+            // 使用2D解析传播 (original path)
+            propagate_analytically_2d<S>(d_u, config.sim_params, point_source.x, y_source, current_z);
+        }
+
+        // 应用频率截止 (always apply to clean up evanescent modes)
         propagate_2d<S>(config.sim_params, fft, 0., cutoff_freq_x, cutoff_freq_y, d_u, d_U);
         // spdlog::info("[STEP 8] propagate_2d completed");
-        save_vector<S>(sub_dir / "wave_after_source.npy", d_u, N);
+        if (config.save_debug_wavefields)
+            save_vector<S>(sub_dir / "wave_after_source.npy", d_u, N);
     } else {
         throw std::runtime_error("Only point source is supported in 2D simulation");
     }
@@ -785,7 +806,8 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
         cutoff_freq_y = cutoff_freq;
         // spdlog::info("[STEP 15] Applying optical element type {}...", 
         //             static_cast<int>(el->type));
-        save_vector<S>(sub_dir / "wave_before_sample.npy", d_u, N);
+        if (config.save_debug_wavefields)
+            save_vector<S>(sub_dir / "wave_before_sample.npy", d_u, N);
         // 处理光学元件 - 只支持Sample类型
         switch (el->type) {
         case OpticalElementType::Sample: {
@@ -795,7 +817,8 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
             apply_sample_2d<S>(*sample, d_u, d_U, config.sim_params, fft, 
                               cutoff_freq_x, cutoff_freq_y, 0);
             // spdlog::info("[STEP 17] Sample applied successfully");
-            save_vector<S>(sub_dir / "wave_after_sample.npy", d_u, N);
+            if (config.save_debug_wavefields)
+                save_vector<S>(sub_dir / "wave_after_sample.npy", d_u, N);
             break;
         }
         case OpticalElementType::PreciseSample: {
@@ -825,24 +848,33 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
     // 最终传播到探测器
     // spdlog::info("[STEP 22] Final propagation to detector...");
     const double final_dz = config.sim_params.z_detector - current_z;
+    const double prop_dz = config.sim_params.use_fresnel_scaling
+                           ? fresnel_z_eff
+                           : final_dz;
     if (final_dz > z_tolerance) {
-        propagate_2d<S>(config.sim_params, fft, final_dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+        propagate_2d<S>(config.sim_params, fft, prop_dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
     }
     // spdlog::info("[STEP 23] Final propagation done");
-    save_vector<S>(sub_dir / "wave_at_detector.npy", d_u, N);
+    if (config.save_debug_wavefields)
+        save_vector<S>(sub_dir / "wave_at_detector.npy", d_u, N);
     // 下采样到探测器
     // spdlog::info("[STEP 24] Downsampling to detector...");
     spdlog::info("  nx={}, ny={}, nr_pixels_x={}, nr_pixels_y={}", nx, ny, nr_pixels_x, nr_pixels_y);
-    // spdlog::info("  d_detector_output = {}", fmt::ptr(d_detector_output));
-    spdlog::info("  detector_pixel_size_x={}, detector_pixel_size_y={}",
-                config.sim_params.detector_pixel_size_x, 
-                config.sim_params.detector_pixel_size_y);
-    spdlog::info("  current_z={}, dx={}, dy={}", config.sim_params.z_detector, dx, dy);
-    square_and_downsample_2d<S>(d_u, nx, ny, d_detector_output, 
+    // Scale detector pixel sizes by magnification for Fresnel scaling
+    double ds_px = config.sim_params.detector_pixel_size_x;
+    double ds_py = config.sim_params.detector_pixel_size_y;
+    double ds_z  = config.sim_params.z_detector;
+    if (config.sim_params.use_fresnel_scaling) {
+        ds_px /= fresnel_M;
+        ds_py /= fresnel_M;
+        ds_z   = fresnel_z_eff;
+    }
+    spdlog::info("  detector_pixel_size_x={}, detector_pixel_size_y={} (effective)",
+                 ds_px, ds_py);
+    spdlog::info("  current_z={} (effective), dx={}, dy={}", ds_z, dx, dy);
+    square_and_downsample_2d<S>(d_u, nx, ny, d_detector_output,
                                nr_pixels_x, nr_pixels_y,
-                               config.sim_params.detector_pixel_size_x,
-                               config.sim_params.detector_pixel_size_y, 
-                               config.sim_params.z_detector,
+                               ds_px, ds_py, ds_z,
                                dx, dy);
     // spdlog::info("[STEP 25] Downsampling done");
 
@@ -900,17 +932,27 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
             }
 
             // 最终传播到探测器
-            const double final_dz = config.sim_params.z_detector - current_z;
-            if (final_dz > z_tolerance) {
-                propagate_2d<S>(config.sim_params, fft, final_dz, 
+            const double final_dz_p = config.sim_params.z_detector - current_z;
+            const double prop_dz_p = config.sim_params.use_fresnel_scaling
+                                     ? fresnel_z_eff
+                                     : final_dz_p;
+            if (final_dz_p > z_tolerance) {
+                propagate_2d<S>(config.sim_params, fft, prop_dz_p,
                               cutoff_freq_x, cutoff_freq_y, d_u, d_U);
             }
 
-            square_and_downsample_2d<S>(d_u, nx, ny, d_detector_output, 
+            // Fresnel-scaled downsampling
+            double ds_px_p = config.sim_params.detector_pixel_size_x;
+            double ds_py_p = config.sim_params.detector_pixel_size_y;
+            double ds_z_p  = config.sim_params.z_detector;
+            if (config.sim_params.use_fresnel_scaling) {
+                ds_px_p /= fresnel_M;
+                ds_py_p /= fresnel_M;
+                ds_z_p   = fresnel_z_eff;
+            }
+            square_and_downsample_2d<S>(d_u, nx, ny, d_detector_output,
                                        nr_pixels_x, nr_pixels_y,
-                                       config.sim_params.detector_pixel_size_x,
-                                       config.sim_params.detector_pixel_size_y, 
-                                       config.sim_params.z_detector,
+                                       ds_px_p, ds_py_p, ds_z_p,
                                        dx, dy);
             cudaMemcpyAsync(&detector_output[nr_pixels * phase_step], d_detector_output,
                             detector_size_bytes, cudaMemcpyDeviceToHost);

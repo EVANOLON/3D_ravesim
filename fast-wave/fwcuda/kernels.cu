@@ -238,13 +238,13 @@ __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams par
     const double x_index = x / pixel_size_x;
     const double y_index = y / pixel_size_y;
     
-    // 边界钳位处理（替代直接 return，避免尖锐边缘衍射伪影）
+    // 超出网格范围 -> 不处理（视为真空，波前不变）
+    if (x_index < 0.0 || x_index >= static_cast<double>(x_len) - 1.0 ||
+        y_index < 0.0 || y_index >= static_cast<double>(y_len) - 1.0) {
+        return;
+    }
     double x_clamped = x_index;
     double y_clamped = y_index;
-    if (x_clamped < 0.0) x_clamped = 0.0;
-    if (x_clamped >= static_cast<double>(x_len) - 1.0) x_clamped = static_cast<double>(x_len) - 2.0;
-    if (y_clamped < 0.0) y_clamped = 0.0;
-    if (y_clamped >= static_cast<double>(y_len) - 1.0) y_clamped = static_cast<double>(y_len) - 2.0;
 
     // 取整和小数部分（用于双线性插值）
     const std::size_t x_floor = static_cast<std::size_t>(x_clamped);
@@ -466,6 +466,27 @@ void square_and_downsample_2d(DevComplex<S> *d_u, int nx, int ny, S *d_out,
     
     // 检查错误
     check_cuda_result("square_and_downsample_2d kernel", cudaPeekAtLastError());
+}
+
+// 2D uniform initialization kernel (for Fresnel scaling)
+template <typename S>
+__global__ void initialize_uniform_2d_kernel(DevComplex<S> *d_u, int nx, int ny,
+                                              DevComplex<S> value) {
+    int ix = blockIdx.x * blockDim.x + threadIdx.x;
+    int iy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (ix >= nx || iy >= ny) return;
+    d_u[iy * nx + ix] = value;
+}
+
+template <typename S>
+void initialize_uniform_2d(DevComplex<S> *d_u, int nx, int ny, Complex<S> value) {
+    constexpr int block_size = 16;
+    dim3 blockDim(block_size, block_size);
+    dim3 gridDim((nx + block_size - 1) / block_size,
+                 (ny + block_size - 1) / block_size);
+    DevComplex<S> dev_val = c2dc(value);
+    initialize_uniform_2d_kernel<S><<<gridDim, blockDim>>>(d_u, nx, ny, dev_val);
+    check_cuda_result("initialize_uniform_2d", cudaPeekAtLastError());
 }
 //3d end
 
@@ -784,8 +805,11 @@ template void propagate_convolve_step_2d<double>(DevComplex<double> *, const Sim
 template void apply_sample_factors_2d<double>(DevComplex<double> *, const SimParams &, double,
                                               uint32_t *, double, double, std::size_t, std::size_t,
                                               DevComplex<double> *, int, double, double);
-template void square_and_downsample_2d<double>(DevComplex<double> *, int, int, double *, 
+template void square_and_downsample_2d<double>(DevComplex<double> *, int, int, double *,
                                               int, int, double, double, double, double, double);
+
+template void initialize_uniform_2d<float>(DevComplex<float> *, int, int, Complex<float>);
+template void initialize_uniform_2d<double>(DevComplex<double> *, int, int, Complex<double>);
 //3d end
 
 template void scale<double>(DevComplex<double> *, Complex<double>, const int);

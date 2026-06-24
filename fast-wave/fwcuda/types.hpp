@@ -61,6 +61,11 @@ struct SimParams {
     double detector_size_x = 0.0;
     double detector_size_y = 0.0;
 
+    // Fresnel scaling (for short source-sample distance)
+    bool use_fresnel_scaling = false;
+    double z_eff = 0.0;          // effective propagation distance
+    double magnification = 1.0;  // geometric magnification M
+
     // 维度标志（内部计算，不暴露给外部）
     bool is_2d() const { return is2d && ny > 1; }
 
