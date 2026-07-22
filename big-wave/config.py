@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ruamel.yaml import comments as yc, YAML
 
 import optical_element
+import plasma_sample as plasma_element
 import propagation
 import source
 import vector
@@ -153,6 +154,21 @@ def parse_optical_element(
     elif dct["type"] == "save_and_exit":
         return optical_element.SaveAndExit(
             z_start=get_float(dct, ["z_start"]), x_positions=np.array([0])
+        )
+    elif dct["type"] == "plasma_sample":
+        ne = np.load(config_dir / dct["ne_grid_path"])
+        ni = np.load(config_dir / dct["ni_grid_path"])
+        te = np.load(config_dir / dct["te_grid_path"])
+        zs = np.load(config_dir / dct["zstar_grid_path"])
+        return plasma_element.PlasmaSample(
+            z_start=float(dct["z_start"]),
+            pixel_size_x=float(dct["pixel_size_x"]),
+            pixel_size_z=float(dct["pixel_size_z"]),
+            pixel_size_y=float(dct.get("pixel_size_y", 0.0)),
+            ne_grid=ne, ni_grid=ni, te_grid=te, zstar_grid=zs,
+            Z=int(dct["Z"]),
+            x_positions=np.array(dct["x_positions"]),
+            y_positions=np.array(dct.get("y_positions", [0.0])),
         )
     else:
         raise ValueError(f'Unknown optical element type: {dct["type"]}.')

@@ -548,11 +548,15 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
         if el["type"] == "sample":
             grid_files.append(config_dir / el["grid_path"])
             el["grid_path"] = os.path.basename(el["grid_path"])
-        elif el["type"] == "precise_sample":  # 添加这一部分
+        elif el["type"] == "precise_sample":
             grid_files.append(config_dir / el["material_grid_path"])
             grid_files.append(config_dir / el["density_grid_path"])
             el["material_grid_path"] = os.path.basename(el["material_grid_path"])
             el["density_grid_path"] = os.path.basename(el["density_grid_path"])
+        elif el["type"] == "plasma_sample":
+            for key in ["ne_grid_path", "ni_grid_path", "te_grid_path", "zstar_grid_path"]:
+                grid_files.append(config_dir / el[key])
+                el[key] = os.path.basename(el[key])
 
     max_x = reduce_simulation_setup_for_save_and_exit(dct, max_x_list)
 

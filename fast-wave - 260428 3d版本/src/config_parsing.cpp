@@ -459,16 +459,6 @@ parse_optical_elements(const YAML::Node &node, const DeltabetaTable &db_table,
     bool has_2d = node["nx"] && node["ny"];
     params.is2d = has_2d;   // ⬅ 设置标志
 
-    // Fresnel scaling: 需要显式启用
-    if (has_2d && node["use_fresnel_scaling"]) {
-        const auto &fs_node = node["use_fresnel_scaling"];
-        if (fs_node.IsScalar()) {
-            // 支持 YAML 布尔值 (true) 和字符串 ('true')
-            params.use_fresnel_scaling = fs_node.as<bool>() ||
-                (fs_node.as<std::string>("") == "true");
-        }
-    }
-
     if (has_2d) {
         params.nx = node["nx"].as<int>();
         params.ny = node["ny"].as<int>();
@@ -629,11 +619,10 @@ std::string zeropad(int number, std::size_t length) {
     auto cutoff_angles = parse_cutoff_angles(computed_node["cutoff_angles"]);
 
     const bool save_final_u_vectors = config_node["save_final_u_vectors"].as<bool>();
-    const bool save_debug_wavefields = config_node["save_debug_wavefields"] ? config_node["save_debug_wavefields"].as<bool>() : false;
 
     return Config{
         sim_params, std::move(optical_elements), std::move(source),
-        dtype,      save_final_u_vectors,        save_debug_wavefields,
+        dtype,      save_final_u_vectors,        false,
         std::move(cutoff_angles),
     };
 }

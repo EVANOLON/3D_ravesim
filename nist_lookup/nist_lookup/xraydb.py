@@ -12,7 +12,7 @@ import json
 import numpy as np
 from scipy.interpolate import interp1d, splrep, splev, UnivariateSpline
 from sqlalchemy import MetaData, create_engine
-from sqlalchemy.orm import sessionmaker,  mapper, clear_mappers
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import SingletonThreadPool
 
 # needed for py2exe?
@@ -45,8 +45,8 @@ def isxrayDB(dbname):
     result = False
     try:
         engine = make_engine(dbname)
-        meta = MetaData(engine)
-        meta.reflect()
+        meta = MetaData()
+        meta.reflect(bind=engine)
         result = all([t in meta.tables for t in _tables])
     except Exception as e:
         print(e)
@@ -165,6 +165,9 @@ class ChantlerTable(_BaseTable):
 
 class xrayDB(object):
     "interface to Xray Data"
+    _registry = None
+    _mapped = False
+
     def __init__(self, dbname='xrayref.db', read_only=True):
         "connect to an existing database"
         if not os.path.exists(dbname):
@@ -190,22 +193,30 @@ class xrayDB(object):
             self.session.flush = readonly_flush
         else:
             self.session = sessionmaker(bind=self.engine, **kwargs)()
-        self.metadata = MetaData(self.engine)
-        self.metadata.reflect()
+        self.metadata = MetaData()
+        self.metadata.reflect(bind=self.engine)
         tables = self.tables = self.metadata.tables
-        try:
-            clear_mappers()
-        except:
-            pass
-        mapper(ChantlerTable,            tables['Chantler'])
-        mapper(WaasmaierTable,           tables['Waasmaier'])
-        mapper(KeskiRahkonenKrauseTable, tables['KeskiRahkonen_Krause'])
-        mapper(ElementsTable,            tables['elements'])
-        mapper(XrayLevelsTable,          tables['xray_levels'])
-        mapper(XrayTransitionsTable,     tables['xray_transitions'])
-        mapper(CosterKronigTable,        tables['Coster_Kronig'])
-        mapper(PhotoAbsorptionTable,     tables['photoabsorption'])
-        mapper(ScatteringTable,          tables['scattering'])
+
+        from sqlalchemy.orm import registry
+        if xrayDB._registry is None:
+            xrayDB._registry = registry()
+        self._mapper_registry = xrayDB._registry
+        if not xrayDB._mapped:
+            mr = self._mapper_registry.map_imperatively
+            _tables_map = [
+                ('Chantler',            ChantlerTable),
+                ('Waasmaier',           WaasmaierTable),
+                ('KeskiRahkonen_Krause',KeskiRahkonenKrauseTable),
+                ('elements',            ElementsTable),
+                ('xray_levels',          XrayLevelsTable),
+                ('xray_transitions',     XrayTransitionsTable),
+                ('Coster_Kronig',        CosterKronigTable),
+                ('photoabsorption',     PhotoAbsorptionTable),
+                ('scattering',          ScatteringTable),
+            ]
+            for name, cls in _tables_map:
+                mr(cls, tables[name])
+            xrayDB._mapped = True
 
     def close(self):
         "close session"
