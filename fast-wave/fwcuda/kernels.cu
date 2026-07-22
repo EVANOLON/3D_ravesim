@@ -401,6 +401,101 @@ void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double
     // printf("[apply_sample_factors_2d] EXIT\n");
 }
 
+//plasma_sample_begin
+template <typename S>
+__global__ void apply_plasma_sample_factors_2d_kernel(
+    DevComplex<S> *d_u, SimParams params, double dz,
+    DevComplex<double> *d_deltabeta_grid,
+    double pixel_size_x, double pixel_size_y,
+    std::size_t x_len, std::size_t y_len,
+    int z_slice_index, double x_position, double y_position)
+{
+    const int ix = blockIdx.x * blockDim.x + threadIdx.x;
+    const int iy = blockIdx.y * blockDim.y + threadIdx.y;
+    const int nx = params.nx;
+    const int ny = params.ny;
+    const double dx = params.dx;
+    const double dy = params.dy;
+
+    if (ix >= nx || iy >= ny) return;
+    const int idx = iy * nx + ix;
+
+    const double x = static_cast<double>(ix - nx / 2) * dx + x_position + pixel_size_x * x_len * 0.5;
+    const double y = static_cast<double>(iy - ny / 2) * dy + y_position + pixel_size_y * y_len * 0.5;
+
+    const double x_index = x / pixel_size_x;
+    const double y_index = y / pixel_size_y;
+
+    double x_clamped = x_index, y_clamped = y_index;
+    if (x_clamped < 0.0) x_clamped = 0.0;
+    if (x_clamped >= static_cast<double>(x_len) - 1.0) x_clamped = static_cast<double>(x_len) - 2.0;
+    if (y_clamped < 0.0) y_clamped = 0.0;
+    if (y_clamped >= static_cast<double>(y_len) - 1.0) y_clamped = static_cast<double>(y_len) - 2.0;
+
+    const std::size_t x_floor = static_cast<std::size_t>(x_clamped);
+    const std::size_t y_floor = static_cast<std::size_t>(y_clamped);
+    const double x_frac = x_clamped - static_cast<double>(x_floor);
+    const double y_frac = y_clamped - static_cast<double>(y_floor);
+
+    const std::size_t slice_offset = z_slice_index * y_len * x_len;
+
+    const DevComplex<double> db_00 = d_deltabeta_grid[slice_offset + y_floor * x_len + x_floor];
+    const DevComplex<double> db_01 = d_deltabeta_grid[slice_offset + y_floor * x_len + x_floor + 1];
+    const DevComplex<double> db_10 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor];
+    const DevComplex<double> db_11 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor + 1];
+
+    DevComplex<double> db_y0, db_y1, interpolated_db;
+    db_y0.x = db_00.x * (1.0 - x_frac) + db_01.x * x_frac;
+    db_y0.y = db_00.y * (1.0 - x_frac) + db_01.y * x_frac;
+    db_y1.x = db_10.x * (1.0 - x_frac) + db_11.x * x_frac;
+    db_y1.y = db_10.y * (1.0 - x_frac) + db_11.y * x_frac;
+    interpolated_db.x = db_y0.x * (1.0 - y_frac) + db_y1.x * y_frac;
+    interpolated_db.y = db_y0.y * (1.0 - y_frac) + db_y1.y * y_frac;
+
+    const double atomfactor = 2.0 * M_PI * dz / params.wl;
+    DevComplex<double> exponent;
+    exponent.x = -atomfactor * interpolated_db.y;
+    exponent.y = -atomfactor * interpolated_db.x;
+
+    const double exp_r = exp(exponent.x);
+    const double angle = exponent.y;
+    const DevComplex<S> factor{
+        static_cast<S>(exp_r * cos(angle)),
+        static_cast<S>(exp_r * sin(angle))
+    };
+    d_u[idx] = complex_mult<S>(d_u[idx], factor);
+}
+
+template <typename S>
+void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                                     DevComplex<double> *d_deltabeta_grid,
+                                     double pixel_size_x, double pixel_size_y,
+                                     std::size_t x_len, std::size_t y_len,
+                                     int z_slice_index, double x_position, double y_position) {
+    const int nx = params.nx;
+    const int ny = params.ny;
+    int actual_nx = (nx > 0) ? nx : params.N;
+    int actual_ny = (ny > 0) ? ny : 1;
+    dim3 blockDim(16, 16);
+    dim3 gridDim((actual_nx + blockDim.x - 1) / blockDim.x,
+                 (actual_ny + blockDim.y - 1) / blockDim.y);
+
+    apply_plasma_sample_factors_2d_kernel<S><<<gridDim, blockDim>>>(
+        d_u, params, dz, d_deltabeta_grid,
+        pixel_size_x, pixel_size_y, x_len, y_len,
+        z_slice_index, x_position, y_position);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "apply_plasma_sample_factors_2d kernel error: %s\n", cudaGetErrorString(err));
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "apply_plasma_sample_factors_2d sync error: %s\n", cudaGetErrorString(err));
+    }
+}
+//plasma_sample_end
+
 template <typename S>
 __global__ void square_and_downsample_2d_kernel(DevComplex<S> *d_u, int nx, int ny, S *d_out, 
                                                 int outsize_x, int outsize_y,
@@ -810,6 +905,12 @@ template void square_and_downsample_2d<double>(DevComplex<double> *, int, int, d
 
 template void initialize_uniform_2d<float>(DevComplex<float> *, int, int, Complex<float>);
 template void initialize_uniform_2d<double>(DevComplex<double> *, int, int, Complex<double>);
+
+// plasma_sample
+template void apply_plasma_sample_factors_2d<float>(DevComplex<float> *, const SimParams &, double,
+    DevComplex<double> *, double, double, std::size_t, std::size_t, int, double, double);
+template void apply_plasma_sample_factors_2d<double>(DevComplex<double> *, const SimParams &, double,
+    DevComplex<double> *, double, double, std::size_t, std::size_t, int, double, double);
 //3d end
 
 template void scale<double>(DevComplex<double> *, Complex<double>, const int);
