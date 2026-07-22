@@ -3,6 +3,7 @@
 #include <Npy++.h>
 #include <spdlog/spdlog.h>
 #include <config_parsing.hpp>
+#include <plasma_physics.hpp>
 
 std::string stringify_key(const char *key) { return std::string(key); }
 
@@ -318,6 +319,116 @@ template <typename Key>
 }
 //precise_sample_update_end
 
+//plasma_sample_begin
+[[nodiscard]] PlasmaSample parse_plasma_sample(const YAML::Node &node,
+                                               const fs::path &sim_dir) {
+    const auto z_start = get_scalar(node, "z_start");
+    const auto pixel_size_x = get_scalar(node, "pixel_size_x");
+    const auto pixel_size_y = node["pixel_size_y"] ? get_scalar(node, "pixel_size_y") : pixel_size_x;
+    const auto pixel_size_z = get_scalar(node, "pixel_size_z");
+    auto x_positions = node["x_positions"].as<std::vector<double>>();
+    std::vector<double> y_positions;
+    if (node["y_positions"]) {
+        y_positions = node["y_positions"].as<std::vector<double>>();
+    } else {
+        y_positions.resize(x_positions.size(), 0.0);
+    }
+    const int Z = node["Z"].as<int>();
+
+    // Load grid files
+    auto ne_arr = npypp::LoadFull<float>(sim_dir / node["ne_grid_path"].as<std::string>());
+    auto ni_arr = npypp::LoadFull<float>(sim_dir / node["ni_grid_path"].as<std::string>());
+    auto te_arr = npypp::LoadFull<float>(sim_dir / node["te_grid_path"].as<std::string>());
+    auto zs_arr = npypp::LoadFull<float>(sim_dir / node["zstar_grid_path"].as<std::string>());
+
+    // Validate shapes
+    if (ne_arr.shape.size() != ni_arr.shape.size() ||
+        ne_arr.shape.size() != te_arr.shape.size() ||
+        ne_arr.shape.size() != zs_arr.shape.size()) {
+        throw std::runtime_error("plasma_sample grid shape ranks differ");
+    }
+    for (std::size_t d = 0; d < ne_arr.shape.size(); ++d) {
+        if (ne_arr.shape[d] != ni_arr.shape[d] ||
+            ne_arr.shape[d] != te_arr.shape[d] ||
+            ne_arr.shape[d] != zs_arr.shape[d]) {
+            throw std::runtime_error("plasma_sample grid shape mismatch at dim " + std::to_string(d));
+        }
+    }
+
+    // Determine dimensions
+    std::size_t z_len, y_len, x_len;
+    if (ne_arr.shape.size() == 2) {
+        // (z, x) — 1D sample
+        z_len = ne_arr.shape[0];
+        y_len = 1;
+        x_len = ne_arr.shape[1];
+    } else if (ne_arr.shape.size() == 3) {
+        // (z, y, x) — 2D sample
+        z_len = ne_arr.shape[0];
+        y_len = ne_arr.shape[1];
+        x_len = ne_arr.shape[2];
+    } else {
+        throw std::runtime_error("plasma_sample grids must be 2D (z, x) or 3D (z, y, x)");
+    }
+
+    // The energy is not available here (it's in subconfig.yaml per source).
+    // We will need to pre-compute deltabeta_grid later when energy is known.
+    // For now, allocate the grid and fill with zeros; it will be recomputed
+    // at simulation time when the energy is available.
+    // (See the python version which computes deltabeta per-pixel in apply().)
+    //
+    // Alternative: store the raw grids and compute on-the-fly in the kernel.
+    // We use Option A (pre-compute) from the design report, but we must
+    // defer the pre-computation until energy is known.
+
+    PlasmaSample ps;
+    ps.z_start = z_start;
+    ps.x_positions = std::move(x_positions);
+    ps.y_positions = std::move(y_positions);
+    ps.type = OpticalElementType::PlasmaSample;
+    ps.pixel_size_x = pixel_size_x;
+    ps.pixel_size_y = pixel_size_y;
+    ps.pixel_size_z = pixel_size_z;
+    ps.ne_grid = std::move(ne_arr.data);
+    ps.ni_grid = std::move(ni_arr.data);
+    ps.te_grid = std::move(te_arr.data);
+    ps.zstar_grid = std::move(zs_arr.data);
+    ps.Z = Z;
+    ps.x_len = x_len;
+    ps.y_len = y_len;
+    ps.z_len = z_len;
+    // deltabeta_grid will be filled later (when energy is available)
+    ps.deltabeta_grid.resize(z_len * y_len * x_len, Complex<double>{0., 0.});
+
+    spdlog::info("Parsed PlasmaSample: {} x {} x {} (z x y x), Z={}", z_len, y_len, x_len, Z);
+    return ps;
+}
+
+// Helper: fill PlasmaSample::deltabeta_grid once energy is known.
+// Called from run_simulation_inner / run_simulation_inner_2d.
+void fill_plasma_deltabeta_grid(PlasmaSample &ps, double energy) {
+    const std::size_t total = ps.z_len * ps.y_len * ps.x_len;
+    ps.deltabeta_grid.resize(total);
+    for (std::size_t i = 0; i < total; ++i) {
+        const float ne = ps.ne_grid[i];
+        if (ne <= 0.0f) {
+            ps.deltabeta_grid[i] = Complex<double>{0., 0.};
+            continue;
+        }
+        const float ni = ps.ni_grid[i];
+        const float te = ps.te_grid[i];
+        const float zs = ps.zstar_grid[i];
+        double d, b, atlen;
+        plasma_physics::plasma_delta_beta_host(
+            static_cast<double>(ne), static_cast<double>(ni),
+            static_cast<double>(te), static_cast<double>(zs),
+            ps.Z, energy, d, b, atlen);
+        ps.deltabeta_grid[i] = Complex<double>{d, b};
+    }
+    spdlog::info("Filled PlasmaSample deltabeta_grid ({} elements, energy={:.1f} eV)", total, energy);
+}
+//plasma_sample_end
+
 [[nodiscard]] std::unique_ptr<OpticalElement> parse_optical_element(const YAML::Node &node,
                                                                     const DeltabetaTable &db_table,
                                                                     const fs::path &sim_dir) {
@@ -330,6 +441,8 @@ template <typename Key>
         return std::make_unique<Sample>(parse_sample(node, db_table, sim_dir));
     } else if (type == "precise_sample") {
         return std::make_unique<PreciseSample>(parse_precise_sample(node, db_table, sim_dir));
+    } else if (type == "plasma_sample") {
+        return std::make_unique<PlasmaSample>(parse_plasma_sample(node, sim_dir));
     } else {
         throw std::runtime_error("Unknown optical element type: " + type);
     }

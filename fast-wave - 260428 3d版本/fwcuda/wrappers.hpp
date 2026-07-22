@@ -52,6 +52,15 @@ void apply_precise_sample_factors(DevComplex<S> *d_u, const SimParams &params, d
                                  int z_slice_index, double x_position);
 //precise_sample_update_end
 
+//plasma_sample_begin
+template <typename S>
+void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                                     DevComplex<double> *d_deltabeta_grid,
+                                     double pixel_size_x, double pixel_size_y,
+                                     std::size_t x_len, std::size_t y_len,
+                                     int z_slice_index, double x_position, double y_position);
+//plasma_sample_end
+
 template <typename S> void scale(DevComplex<S> *d_u, Complex<S> scale, const int N);
 
 template <typename S>

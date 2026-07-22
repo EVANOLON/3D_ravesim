@@ -100,11 +100,106 @@ class PlasmaSample:
             self._apply_1d(u, U, sim_params, cutoff_freq, stepping_iteration, history)
 
     def _apply_2d(self, u, U, sim_params, cutoff_freq, stepping_iteration, history):
-        """2D plasma sample propagation — not yet implemented (see docs/plasma_2d_upgrade_design.md)."""
-        raise NotImplementedError(
-            "PlasmaSample._apply_2d is not yet implemented. "
-            "See docs/plasma_2d_upgrade_design.md for the upgrade design."
+        """2D plasma sample propagation with bilinear interpolation.
+
+        The 2D deltabeta grid (ny × nx) is computed per z-slice by calling
+        plasma_delta_beta() for each pixel, then bilinearly interpolated
+        onto the simulation wavefront grid.  Mirrors Sample._apply_2d().
+        """
+        from propagation import (
+            convert_energy_wavelength,
+            propagate_2d,
+            square_and_downsample_2d,
         )
+
+        energy = convert_energy_wavelength(sim_params.wl)
+        nz, ny, nx = self.ne_grid.shape
+        dy_s = self.pixel_size_y if self.pixel_size_y != 0.0 else self.pixel_size_x
+
+        x_pos = self.x_positions[stepping_iteration]
+        y_pos = (self.y_positions[stepping_iteration]
+                 if self.y_positions is not None else 0.0)
+
+        sim_nx = sim_params.nx
+        sim_ny = sim_params.ny
+
+        for rowidx in range(nz):
+            if history is not None:
+                z = self.z_start + rowidx * self.pixel_size_z
+                history.push(
+                    square_and_downsample_2d(u, sim_params, z), z,
+                )
+
+            # Build the 2D deltabeta grid for this z-slice: (ny, nx)
+            ne_slice = self.ne_grid[rowidx, :, :]
+            ni_slice = self.ni_grid[rowidx, :, :]
+            te_slice = self.te_grid[rowidx, :, :]
+            zs_slice = self.zstar_grid[rowidx, :, :]
+
+            row_deltabeta = np.zeros((ny, nx), dtype=np.complex128)
+            # Vectorise: find non-vacuum pixels
+            mask = ne_slice > 0.0
+            if mask.any():
+                ne_m = ne_slice[mask].ravel()
+                ni_m = ni_slice[mask].ravel()
+                te_m = te_slice[mask].ravel()
+                zs_m = zs_slice[mask].ravel()
+                # Call plasma_delta_beta for each masked pixel
+                d_list = []
+                b_list = []
+                for i in range(len(ne_m)):
+                    d, b, _ = plasma_delta_beta(
+                        float(ne_m[i]), float(ni_m[i]), float(te_m[i]),
+                        float(zs_m[i]), self.Z, energy)
+                    d_list.append(d)
+                    b_list.append(b)
+                row_deltabeta[mask] = np.array(d_list, dtype=np.float64) + \
+                                      1j * np.array(b_list, dtype=np.float64)
+            # vacuum pixels stay at 0+0j
+
+            def modifier(idx, chunk):
+                flat = idx + np.arange(len(chunk), dtype=np.int64)
+                ix = flat % sim_nx
+                iy = flat // sim_nx
+
+                # Physical coordinates (centred, with phase step offset)
+                x = (ix - sim_nx / 2.0) * sim_params.dx + x_pos + nx * self.pixel_size_x * 0.5
+                y = (iy - sim_ny / 2.0) * sim_params.get_dy() + y_pos + ny * dy_s * 0.5
+
+                # Map to sample grid coordinates
+                x_idx = x / self.pixel_size_x
+                y_idx = y / dy_s
+
+                # Bilinear interpolation with edge clamping
+                x_floor = np.floor(x_idx).astype(np.int64)
+                y_floor = np.floor(y_idx).astype(np.int64)
+                x_frac = x_idx - x_floor
+                y_frac = y_idx - y_floor
+
+                x_floor = np.clip(x_floor, 0, nx - 2)
+                y_floor = np.clip(y_floor, 0, ny - 2)
+
+                # Four corner values
+                db_00 = row_deltabeta[y_floor, x_floor]
+                db_01 = row_deltabeta[y_floor, x_floor + 1]
+                db_10 = row_deltabeta[y_floor + 1, x_floor]
+                db_11 = row_deltabeta[y_floor + 1, x_floor + 1]
+
+                # Bilinear interpolation
+                db_y0 = db_00 * (1.0 - x_frac) + db_01 * x_frac
+                db_y1 = db_10 * (1.0 - x_frac) + db_11 * x_frac
+                interpolated_db = db_y0 * (1.0 - y_frac) + db_y1 * y_frac
+
+                chunk *= _material_factor(interpolated_db, self.pixel_size_z, sim_params.wl)
+
+            u.modify_chunked(sim_params.chunk_size, modifier)
+            propagate_2d(
+                u, U,
+                sim_params.dx, sim_params.get_dy(),
+                sim_params.wl, self.pixel_size_z,
+                sim_params.chunk_size, cutoff_freq,
+                sim_nx, sim_ny,
+            )
 
     def _apply_1d(
         self,

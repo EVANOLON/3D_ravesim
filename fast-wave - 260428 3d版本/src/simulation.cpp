@@ -298,6 +298,72 @@ void apply_precise_sample(PreciseSample ps, DevComplex<S> *d_u, DevComplex<S> *d
 }
 //precise_sample_update_end
 
+//plasma_sample_begin
+template <typename S>
+void apply_plasma_sample_2d(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
+                             SimParams const &params, FFT<S> const &fft,
+                             double cutoff_freq_x, double cutoff_freq_y,
+                             std::size_t phase_step) {
+    const double dz = ps.pixel_size_z;
+
+    // Upload pre-computed deltabeta_grid to GPU
+    DevComplex<double> *d_deltabeta;
+    const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
+    check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
+    cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
+
+    for (std::size_t i = 0; i < ps.z_len; ++i) {
+        apply_plasma_sample_factors_2d<S>(d_u, params, dz, d_deltabeta,
+                                          ps.pixel_size_x, ps.pixel_size_y,
+                                          ps.x_len, ps.y_len, i,
+                                          ps.x_positions[phase_step],
+                                          ps.y_positions[phase_step]);
+        propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+    }
+
+    cudaFree(d_deltabeta);
+}
+
+template <typename S>
+void apply_plasma_sample(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
+                          SimParams const &params, FFT<S> const &fft, double cutoff_freq,
+                          std::size_t phase_step) {
+    if (params.is2d) {
+        double cf_x = cutoff_freq;
+        double cf_y = cutoff_freq;
+        apply_plasma_sample_2d<S>(ps, d_u, d_U, params, fft, cf_x, cf_y, phase_step);
+    } else {
+        // 1D path: propagate step by step using pre-computed deltabeta_grid
+        // For 1D we use the same 2D kernel with ny=1, y_len=1, pixel_size_y=0.
+        const double dz = ps.pixel_size_z;
+
+        DevComplex<double> *d_deltabeta;
+        const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
+        check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
+        cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
+
+        // For 1D, simulate by applying the material factor directly (scale kernel)
+        // This is simpler than creating a 1D kernel — we scale the entire wavefield
+        // by the plasma factor. Since 1D PlasmaSample is better handled by Python,
+        // we provide this as a fallback.
+        for (std::size_t i = 0; i < ps.z_len; ++i) {
+            // For each z-slice, we need per-column deltabeta.
+            // Use the 2D kernel with ny=1, y_len=1 for simplicity.
+            SimParams params_1d = params;
+            params_1d.ny = 1;
+            // The 2D kernel with ny=1 works as 1D
+            apply_plasma_sample_factors_2d<S>(d_u, params_1d, dz, d_deltabeta,
+                                              ps.pixel_size_x, 0.0,
+                                              ps.x_len, 1, i,
+                                              ps.x_positions[phase_step], 0.0);
+            propagate<S>(params, fft, dz, cutoff_freq, d_u, d_U);
+        }
+
+        cudaFree(d_deltabeta);
+    }
+}
+//plasma_sample_end
+
 template <typename S>
 void apply_optical_element(OpticalElement *el, DevComplex<S> *d_u, DevComplex<S> *d_U,
                            SimParams const &params, FFT<S> const &fft, double cutoff_freq,
@@ -320,8 +386,12 @@ void apply_optical_element(OpticalElement *el, DevComplex<S> *d_u, DevComplex<S>
         apply_sample<S>(*reinterpret_cast<Sample *>(el), d_u, d_U, params, fft, cutoff_freq,
                         phase_step);
         break;
-    case OpticalElementType::PreciseSample:  // 添加这一case
+    case OpticalElementType::PreciseSample:
         apply_precise_sample<S>(*reinterpret_cast<PreciseSample *>(el), d_u, d_U, params, fft, cutoff_freq,
+                               phase_step);
+        break;
+    case OpticalElementType::PlasmaSample:
+        apply_plasma_sample<S>(*reinterpret_cast<PlasmaSample *>(el), d_u, d_U, params, fft, cutoff_freq,
                                phase_step);
         break;
     default:
@@ -767,6 +837,14 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
     std::optional<Snapshot> opt_snapshot = std::nullopt;
     // spdlog::info("[STEP 11] Starting optical elements loop...");
 
+    // Fill PlasmaSample deltabeta grids (energy known from wl)
+    const double energy = h * c_0 / (config.sim_params.wl * eV_to_joule);
+    for (auto &el : config.optical_elements) {
+        if (el->type == OpticalElementType::PlasmaSample) {
+            fill_plasma_deltabeta_grid(*reinterpret_cast<PlasmaSample *>(el.get()), energy);
+        }
+    }
+
     // 处理光学元件
     for (std::size_t i = 0; i < config.optical_elements.size(); ++i) {
         // spdlog::info("[STEP 12] Processing element {} of type {}", 
@@ -802,12 +880,19 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
             break;
         }
         case OpticalElementType::PreciseSample: {
-            // 暂时不支持
             throw std::runtime_error("PreciseSample not supported in 2D simulation yet");
             break;
         }
+        case OpticalElementType::PlasmaSample: {
+            PlasmaSample* plasma = reinterpret_cast<PlasmaSample *>(el);
+            apply_plasma_sample_2d<S>(*plasma, d_u, d_U, config.sim_params, fft,
+                                      cutoff_freq_x, cutoff_freq_y, 0);
+            if (config.save_debug_wavefields)
+                save_vector<S>(sub_dir / "wave_after_plasma.npy", d_u, N);
+            break;
+        }
         default:
-            throw std::runtime_error("Only Sample optical element type is handled in 2D simulation");
+            throw std::runtime_error("Only Sample/PlasmaSample optical element type is handled in 2D simulation");
         }
 
         current_z = el->z_start + el->total_thickness();
@@ -885,8 +970,14 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
                 switch (el->type) {
                 case OpticalElementType::Sample: {
                     Sample* sample = reinterpret_cast<Sample *>(el);
-                    apply_sample_2d<S>(*sample, d_u, d_U, config.sim_params, fft, 
+                    apply_sample_2d<S>(*sample, d_u, d_U, config.sim_params, fft,
                                       cutoff_freq_x, cutoff_freq_y, phase_step);
+                    break;
+                }
+                case OpticalElementType::PlasmaSample: {
+                    PlasmaSample* plasma = reinterpret_cast<PlasmaSample *>(el);
+                    apply_plasma_sample_2d<S>(*plasma, d_u, d_U, config.sim_params, fft,
+                                              cutoff_freq_x, cutoff_freq_y, phase_step);
                     break;
                 }
                 default:
@@ -1010,6 +1101,14 @@ void run_simulation_inner(const Config &config, const std::filesystem::path &sub
     propagate_source(d_u, d_U, config.source.get(), config.sim_params, fft, cutoff_freq, current_z);
 
     // save_vector<S>(sub_dir / ("keypoint_after_pa.npy"), d_u, config.sim_params.N);
+
+    // Fill PlasmaSample deltabeta grids
+    const double energy_1d = h * c_0 / (config.sim_params.wl * eV_to_joule);
+    for (auto &el : config.optical_elements) {
+        if (el->type == OpticalElementType::PlasmaSample) {
+            fill_plasma_deltabeta_grid(*reinterpret_cast<PlasmaSample *>(el.get()), energy_1d);
+        }
+    }
 
     std::optional<Snapshot> opt_snapshot = std::nullopt;
 

@@ -26,6 +26,11 @@ using DeltabetaTable = std::vector<std::pair<Material, Complex<double>>>;
                                                 const fs::path &sim_dir);
 //precise_sample_update_end
 
+//plasma_sample_begin
+[[nodiscard]] PlasmaSample parse_plasma_sample(const YAML::Node &node,
+                                               const fs::path &sim_dir);
+//plasma_sample_end
+
 [[nodiscard]] std::unique_ptr<OpticalElement> parse_optical_element(const YAML::Node &node,
                                                                     const DeltabetaTable &db_table,
                                                                     const fs::path &sim_dir);

@@ -61,7 +61,17 @@ __global__ void apply_precise_sample_factors_kernel(DevComplex<S> *d_u, SimParam
                                                    double pixel_size_x, std::size_t x_len,
                                                    int z_slice_index, double x_position);
 //precise_sample_update_end
-                                            
+
+//plasma_sample_begin
+template <typename S>
+__global__ void apply_plasma_sample_factors_2d_kernel(
+    DevComplex<S> *d_u, SimParams params, double dz,
+    DevComplex<double> *d_deltabeta_grid,
+    double pixel_size_x, double pixel_size_y,
+    std::size_t x_len, std::size_t y_len,
+    int z_slice_index, double x_position, double y_position);
+//plasma_sample_end
+
 template <typename S>
 __global__ void scale_kernel(DevComplex<S> *d_u, DevComplex<S> scale, const int N);
 

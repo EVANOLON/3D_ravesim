@@ -71,6 +71,9 @@ struct Config {
     return h * c_0 / (energy_or_wavelength * eV_to_joule);
 }
 
+/// Fill PlasmaSample deltabeta_grid from raw plasma grids once energy is known.
+void fill_plasma_deltabeta_grid(PlasmaSample &ps, double energy);
+
 void run_simulation(const Config &config, const std::filesystem::path &sub_dir,
                     std::optional<double> history_dz);
 

@@ -19,6 +19,7 @@ enum class OpticalElementType {
     EnvGrating,
     Sample,
     PreciseSample,
+    PlasmaSample,
 };
 
 struct OpticalElement {
@@ -96,5 +97,24 @@ struct PreciseSample : public OpticalElement {
     std::size_t nr_history_entries() const override { return z_len; }
 };
 //precise_sample_update_end
+
+//plasma_sample_begin
+struct PlasmaSample : public OpticalElement {
+    std::vector<float> ne_grid;                  // electron density [cm^-3]
+    std::vector<float> ni_grid;                  // ion density [cm^-3]
+    std::vector<float> te_grid;                  // electron temperature [eV]
+    std::vector<float> zstar_grid;               // average ionisation state
+    int Z;                                       // atomic number
+
+    // Pre-computed deltabeta (set at parse time)
+    std::vector<Complex<double>> deltabeta_grid;
+
+    std::size_t x_len, y_len, z_len;
+    double pixel_size_x, pixel_size_y, pixel_size_z;
+
+    double total_thickness() const override { return pixel_size_z * z_len; }
+    std::size_t nr_history_entries() const override { return z_len; }
+};
+//plasma_sample_end
 
 #endif // _FAST_WAVE_OPTICAL_ELEMENT_HPP
