@@ -14,11 +14,38 @@
 const PYTHON = '/home/taylor/anaconda3/envs/rave-sim/bin/python'
 const VALIDATE_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/validate_sim.py'
 const DEFAULT_FASTWAVE = '/mnt/d/rave-sim-main/rave-sim-main/fast-wave/build-Release/fastwave'
+// Copy whitelist: simulation copies may only be written under OUTPUT_ROOT.
+const OUTPUT_ROOT = '/mnt/d/rave-sim-main/rave-sim-main/output'
+const AGENT_RUNS_DIR = OUTPUT_ROOT + '/_agent_runs'
 const NVIDIA_SMI_CANDIDATES = [
   '/usr/lib/wsl/lib/nvidia-smi',
   '/usr/bin/nvidia-smi',
   '/usr/local/bin/nvidia-smi',
 ]
+
+function normalizePath(p) {
+  const abs = String(p).startsWith('/') ? String(p) : '/' + String(p)
+  const parts = []
+  for (const seg of abs.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') parts.pop()
+    else parts.push(seg)
+  }
+  return '/' + parts.join('/')
+}
+
+function isUnderOutputRoot(p) {
+  const t = normalizePath(p)
+  const root = normalizePath(OUTPUT_ROOT)
+  return t === root || t.startsWith(root + '/')
+}
+
+// Default copy target: always under output/_agent_runs, uniquely named.
+function defaultTarget(simDir) {
+  const base = (String(simDir).split('/').filter(Boolean).pop() || 'sim').replace(/[^A-Za-z0-9._-]/g, '_')
+  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+  return AGENT_RUNS_DIR + '/' + base + '__agentrun_' + ts
+}
 
 export default {
   name: 'rave-sim-tools',
@@ -77,6 +104,11 @@ export default {
     }
 
     async function copySimDir(src, targetDir) {
+      if (!isUnderOutputRoot(targetDir)) {
+        throw new Error('copy target rejected: must be inside ' + OUTPUT_ROOT + ' (got ' + targetDir + ')')
+      }
+      const mkdir = await runAndCollect(['/bin/mkdir', '-p', AGENT_RUNS_DIR], '/', undefined, 4096)
+      if (mkdir.outcome.exitCode !== 0) throw new Error('mkdir failed: ' + (mkdir.err || mkdir.out))
       const rm = await runAndCollect(['/bin/rm', '-rf', targetDir], '/', undefined, 4096)
       if (rm.outcome.exitCode !== 0) throw new Error('rm failed: ' + (rm.err || rm.out))
       const cp = await runAndCollect(['/bin/cp', '-r', src, targetDir], '/', undefined, 4096)
@@ -200,8 +232,13 @@ export default {
         if (!simDir) return { error: 'sim_dir is required' }
         const idx = args.source_idx === undefined ? 0 : Number(args.source_idx)
         const fw = args.fastwave_path ? String(args.fastwave_path) : DEFAULT_FASTWAVE
-        const targetDir = args.target_dir ? String(args.target_dir) : (simDir.replace(/\/+$/, '') + '__agentrun')
+        const targetDir = args.target_dir ? String(args.target_dir) : defaultTarget(simDir)
         const skip = args.skip_check === true
+
+        // whitelist: copies may only land under output/
+        if (!isUnderOutputRoot(targetDir)) {
+          return { error: 'target_dir rejected: must be inside ' + OUTPUT_ROOT + ' (got ' + targetDir + ')' }
+        }
 
         // feasibility gate
         if (!skip) {
@@ -217,7 +254,14 @@ export default {
 
         const gpu = await gpuInfo()
         if (!gpu.ok) return { error: 'GPU unavailable: ' + gpu.detail }
-        await copySimDir(simDir, targetDir)
+        let copied = false
+        try {
+          await copySimDir(simDir, targetDir)
+          copied = true
+        } catch (e) {
+          return { error: 'copy failed: ' + String(e && e.message ? e.message : e) }
+        }
+        if (!copied) return { error: 'copy failed silently' }
         const jobId = 'rv' + (++seq)
         const handle = subprocess.spawn({
           argv: [fw, '-s', String(idx), targetDir],
