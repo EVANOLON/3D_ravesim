@@ -12,13 +12,14 @@
 namespace plasma_physics {
 
 constexpr double R_ELECTRON_CM = 2.8179403227e-13;
-constexpr double H_PLANCK = 6.62607004e-34;
-constexpr double C_LIGHT = 299792458.0;
-constexpr double EV_TO_JOULE = 1.602176634e-19;
-constexpr double PLANCK_HC = H_PLANCK * C_LIGHT;
+constexpr double PLANCK_HC_EV_CM = 1.23984e-4;  // hc in eV·cm (matching nist_lookup PLANCK_HC)
 
 inline double energy_to_wavelength_cm(double energy_eV) {
-    return 1.0e-8 * PLANCK_HC / energy_eV;
+    return PLANCK_HC_EV_CM / energy_eV;
+}
+
+inline double wavelength_cm_to_energy(double lambda_cm) {
+    return PLANCK_HC_EV_CM / lambda_cm;
 }
 
 inline double gaunt_ff(double /*T_e*/, double /*energy*/) { return 1.0; }

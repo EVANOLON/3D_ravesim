@@ -138,7 +138,11 @@ def apply_frequency_cutoff_2d(
     This is the 2D equivalent of apply_frequency_cutoff for 1D (which uses a
     symmetric interval). For 2D we use a circular mask, matching fast-wave.
     """
-    freq_sq = freq ** 2
+    # Use Euclidean norm of (freq_x, freq_y) as the cutoff radius, matching
+    # fast-wave's propagate_convolve_step_2d_kernel which checks
+    #   kx² + ky² ≤ cutoff_freq_x² + cutoff_freq_y².
+    # For a square detector freq_x == freq_y == freq, giving threshold 2·freq².
+    freq_sq = 2.0 * freq ** 2
 
     # Pre-compute kx² and ky² for all indices
     kx2 = np.zeros(nx, dtype=np.float64)
@@ -212,8 +216,8 @@ def propagate(
 
     def propagate_chunk(idx: int, chunk: np.ndarray) -> None:
         fx = fftfreq_chunk(n, idx, chunk_size) / dx
-        chunk *= np.exp(-1j * 2 * np.pi / wl * dz) * np.exp(
-            1j * np.pi * wl * dz * (fx**2)
+        chunk *= np.exp(1j * 2 * np.pi / wl * dz) * np.exp(
+            -1j * np.pi * wl * dz * (fx**2)
         )
 
     if not skip_fft:
@@ -270,8 +274,8 @@ def propagate_2d(
         ix = flat % nx
         iy = flat // nx
         k_sq = kx2[ix] + ky2[iy]
-        chunk *= np.exp(-1j * 2 * np.pi / wl * dz) * np.exp(
-            1j * np.pi * wl * dz * k_sq
+        chunk *= np.exp(1j * 2 * np.pi / wl * dz) * np.exp(
+            -1j * np.pi * wl * dz * k_sq
         )
 
     if not skip_fft:
@@ -290,7 +294,7 @@ def propagate_analytically(u: Vector, z: float, x_source: float, params: SimPara
         r = np.sqrt(x**2 + z**2)
         # we use the sqrt of r instead of r so that the probability, i.e. wave function squared, decreases linearly with
         # distance instead of quadratically. This is because we are effectively in 2d and not 3d.
-        chunk[:] = np.exp(r * (-2j * np.pi / params.wl)) / np.sqrt(r)
+        chunk[:] = np.exp(r * (2j * np.pi / params.wl)) / np.sqrt(r)
 
     u.write_chunked(params.chunk_size, analytical)
 
@@ -315,7 +319,7 @@ def propagate_analytically_2d(
         x = (ix - nx / 2) * params.dx - x_source
         y = (iy - ny / 2) * params.get_dy() - y_source
         r = np.sqrt(x**2 + y**2 + z**2)
-        chunk[:] = np.exp(r * (-2j * np.pi / params.wl)) / r
+        chunk[:] = np.exp(r * (2j * np.pi / params.wl)) / r
 
     u.write_chunked(params.chunk_size, analytical)
 

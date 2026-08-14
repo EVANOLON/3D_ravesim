@@ -10,24 +10,25 @@ RAVE-SIM（Really big/fast wAVE SIMulation）是 ETH Zurich 开发的 X 射线�
 
 ```
 u(x, z+dz) = IFFT[ FFT[u(x,z)] × H(f) ]
-H(f) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·f²)
+H(f) = exp(+2π·i·dz/λ) × exp(-π·i·λ·dz·f²)
 ```
 
 当波穿过材料时，与物质的相互作用表示为：
 
 ```
-u_out = u_in × exp(2π·i·t/λ · (δ + iβ))
+u_out = u_in × exp(-2π·i·t/λ · (δ + iβ)⁺)
+     = u_in × exp(-2π·i·δ·t/λ) × exp(-2π·β·t/λ)
 ```
 
-其中 δ 是折射率衰减（相位偏移），β 是吸收指数，两者通过 NIST 数据库查询获得。
+其中 δ 是折射率衰减（相位偏移），β 是吸收指数，两者通过 NIST 数据库查询获得。`(δ + iβ)⁺` 表示对复数值取共轭。
 
 从点源出发的初始球面波由下式生成：
 
 ```
-u(x) = exp(-2π·i·r/λ) / √r ,  r = √(x² + z²)
+u(x) = exp(+2π·i·r/λ) / √r ,  r = √(x² + z²)
 ```
 
-采用 exp(+i·ω·t) 时域符号约定，FFT 为正变换。
+采用 `exp(+i·k·z)` 空间相位约定（对应 `exp(-i·ω·t)` 时域约定），FFT 为正变换。big-wave 与 fast-wave 两套引擎现已统一使用此约定。
 
 ---
 
@@ -100,6 +101,12 @@ big-wave 物理模型的精确 GPU 移植，所有计算驻留在 GPU 显存，�
 
 **precise_Sample（精确样品）：** 在 Sample 基础上增加独立密度网格，运行时通过 NIST 库逐像素计算 δ+β，实现更精确的密度建模。
 
+**PlasmaSample（等离子体样品）：** 用等离子体物理量网格（电子密度 n_e、离子密度 n_i、电子温度 T_e、平均电离态 Z*）描述激光等离子体，逐像素调用 `plasma_delta_beta()` 计算复折射率。真空由 `n_e == 0` 表示（δ=β=0）。折射率分解为：
+- δ = δ_free + δ_bound（自由电子色散 + 束缚电子 Chantler 标度）
+- β = β_bound + β_ff（光致吸收 + Kramers 逆轫致辐射）
+
+支持 1D 和 2D 传播，是 3D 升级中新增的光学元件，详见 `docs/plasma_2d_upgrade_design.md` 与 `tests/plasma_sample/`。
+
 **SaveAndExit（标记元件）：** 在指定 z 位置保存当前波场并停止仿真，支持分阶段仿真。
 
 ### 1D 探测器输出
@@ -124,7 +131,7 @@ big-wave 物理模型的精确 GPU 移植，所有计算驻留在 GPU 显存，�
 
 ```
 u(x,y,z+dz) = IFFT2D[ FFT2D[u(x,y,z)] × H(f_x, f_y) ]
-H(f_x, f_y) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·(f_x² + f_y²))
+H(f_x, f_y) = exp(+2π·i·dz/λ) × exp(-π·i·λ·dz·(f_x² + f_y²))
 ```
 
 ### 当前实现状态（开发中，fast-wave 独占）

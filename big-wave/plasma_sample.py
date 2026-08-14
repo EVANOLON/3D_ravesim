@@ -30,7 +30,7 @@ logger = logging.getLogger("big-wave")
 
 def _material_factor(deltabeta: np.ndarray, thickness: float, wl: float) -> np.ndarray:
     """exp(2*pi*i * thickness/wl * deltabeta) — inlined from optical_element."""
-    return np.exp(2j * np.pi * thickness / wl * deltabeta)
+    return np.exp(-2j * np.pi * thickness / wl * np.conj(deltabeta))
 
 
 @dataclass
@@ -170,25 +170,29 @@ class PlasmaSample:
                 x_idx = x / self.pixel_size_x
                 y_idx = y / dy_s
 
-                # Bilinear interpolation with edge clamping
+                # Bilinear interpolation — out-of-bounds → deltabeta = 0 (vacuum)
                 x_floor = np.floor(x_idx).astype(np.int64)
                 y_floor = np.floor(y_idx).astype(np.int64)
-                x_frac = x_idx - x_floor
-                y_frac = y_idx - y_floor
+                x_frac = x_idx - x_floor.astype(np.float64)
+                y_frac = y_idx - y_floor.astype(np.float64)
 
-                x_floor = np.clip(x_floor, 0, nx - 2)
-                y_floor = np.clip(y_floor, 0, ny - 2)
+                # Mask: inside the plasma grid
+                inside = (x_floor >= 0) & (x_floor < nx - 1) & \
+                         (y_floor >= 0) & (y_floor < ny - 1)
 
-                # Four corner values
-                db_00 = row_deltabeta[y_floor, x_floor]
-                db_01 = row_deltabeta[y_floor, x_floor + 1]
-                db_10 = row_deltabeta[y_floor + 1, x_floor]
-                db_11 = row_deltabeta[y_floor + 1, x_floor + 1]
+                # Clamp only for in-bounds indexing (out-of-bounds handled by mask)
+                x_fc = np.clip(x_floor, 0, nx - 2)
+                y_fc = np.clip(y_floor, 0, ny - 2)
 
-                # Bilinear interpolation
+                db_00 = row_deltabeta[y_fc, x_fc]
+                db_01 = row_deltabeta[y_fc, x_fc + 1]
+                db_10 = row_deltabeta[y_fc + 1, x_fc]
+                db_11 = row_deltabeta[y_fc + 1, x_fc + 1]
+
                 db_y0 = db_00 * (1.0 - x_frac) + db_01 * x_frac
                 db_y1 = db_10 * (1.0 - x_frac) + db_11 * x_frac
                 interpolated_db = db_y0 * (1.0 - y_frac) + db_y1 * y_frac
+                interpolated_db[~inside] = 0.0 + 0.0j  # vacuum outside plasma grid
 
                 chunk *= _material_factor(interpolated_db, self.pixel_size_z, sim_params.wl)
 

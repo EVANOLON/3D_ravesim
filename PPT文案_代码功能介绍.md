@@ -46,7 +46,7 @@ u(x, z+dz) = IFFT[ FFT[u(x,z)] × H(f_x) ]
 
 传递函数：
 ```
-H(f_x) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·f_x²)
+H(f_x) = exp(+2π·i·dz/λ) × exp(-π·i·λ·dz·f_x²)
 ```
 
 **一维波场的物理含义**
@@ -57,7 +57,7 @@ H(f_x) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·f_x²)
 
 **球面波初始化（点源）**
 ```
-u(x) = exp(-2π·i·r/λ) / √r,  r = √(x² + z²)
+u(x) = exp(+2π·i·r/λ) / √r,  r = √(x² + z²)
 ```
 - 1/√r 衰减对应于二维空间中的强度线性衰减
 
@@ -200,7 +200,7 @@ u(x,y,z+dz) = IFFT2D[ FFT2D[u(x,y,z)] × H(f_x, f_y) ]
 
 二维传递函数：
 ```
-H(f_x, f_y) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·(f_x² + f_y²))
+H(f_x, f_y) = exp(+2π·i·dz/λ) × exp(-π·i·λ·dz·(f_x² + f_y²))
 ```
 
 **与 1D 的关键区别**
@@ -293,7 +293,7 @@ source:
 | **网格参数** | N, dx | nx, ny, dx, dy |
 | **总点数** | N | nx × ny |
 | **源** | PointSource(x, z), VectorSource | PointSource(x, y, z) |
-| **初始化** | `exp(-2πir/λ)/√r`, r=√(x²+z²) | `exp(-2πir/λ)/r`, r=√(x²+y²+z²) |
+| **初始化** | `exp(+2πir/λ)/√r`, r=√(x²+z²) | `exp(+2πir/λ)/r`, r=√(x²+y²+z²) |
 | **FFT** | 1D (rustfft / cuFFT 1D) | 2D (cuFFT 2D) |
 | **光栅** | Grating, EnvGrating | ❌ 暂不支持 |
 | **样品** | Sample (2D grid), precise_Sample | Sample (3D grid) |

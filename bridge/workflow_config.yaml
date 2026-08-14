@@ -1,0 +1,142 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Multi1D++ → RAVE-SIM 工作流默认配置文件
+# ═══════════════════════════════════════════════════════════════════════════════
+# 此文件定义工作流桥接的默认参数。命令行参数会覆盖此处的值。
+# 路径均相对于 RAVE-SIM 项目根目录 (big-wave/ 的父目录)。
+
+# ──── Multi1D++ 输入 ─────────────────────────────────────────────────────────
+multi1d:
+  # Multi1D++ case 文件路径或输出目录
+  # case_dir: "path/to/case_output"
+  case_dir: null
+
+  # 输出文件后缀 (Multi1D++ 默认 ASCII 格式)
+  scalars_suffix:   ".scalars.dat"
+  center_suffix:    ".center.dat"
+  interface_suffix: ".interface.dat"
+  group_suffix:     ".group.dat"
+
+  # 材料数据库路径 (相对于 case_dir 或绝对路径)
+  material_base: "matter++/material.base"
+
+# ──── 时间步选择 ─────────────────────────────────────────────────────────────
+time:
+  # 时间步切片: start:step:end (Python slice 语法, end 不包含) 或 "all"
+  timesteps: "all"
+
+  # 或指定单个时间步列表: [0, 10, 20, 50, 100]
+  # timestep_list: []
+
+# ──── 几何映射 ───────────────────────────────────────────────────────────────
+geometry:
+  # 实验几何: "side-on" | "face-on" | "cylindrical"
+  mode: "side-on"
+
+  # Side-on: Multi1D 空间轴 (激光方向) → RAVE-SIM z 轴 (X射线传播方向)
+  # 横向 x 轴均匀延展
+  side_on:
+    transverse_pixels: 512      # nx: 横向像素数
+    transverse_size_um: 200.0   # 横向物理范围 [μm]
+    # pixel_size_z 由插值网格自动确定
+
+  # Face-on: Multi1D 空间轴 → RAVE-SIM x 轴, z 为薄片
+  face_on:
+    z_layers: 1                 # z 方向层数
+    thickness_um: 10.0          # z 方向总厚度 [μm]
+
+  # Cylindrical: 1D 径向剖面旋转生成 2D 环
+  cylindrical:
+    radial_pixels: 256
+    angular_pixels: 256         # 仅 2D 模式
+
+# ──── 混合网格构建 ───────────────────────────────────────────────────────────
+hybrid_grid:
+  # 冷固体 / 等离子体 自动切换阈值
+  solid_plasma_split:
+    Zstar_fraction: 0.05        # Z* / Z_max < 0.05 → 冷固体
+    Te_threshold_eV: 5.0        # Te < 5 eV → 冷固体
+    # 两个条件同时满足才使用固体模块
+
+  # 冷固体区: 使用 precise_Sample (逐像素密度 + 多元素 Chantler)
+  solid:
+    module: "precise_sample"    # "precise_sample" | "sample"
+    # 若选 "sample": 离散密度层数
+    density_bins: 30            # 密度离散化为 30 个材料索引
+
+  # 等离子体区: 使用 PlasmaSample
+  plasma:
+    effective_Z: 1              # 低Z等效原子序数 (完全电离时无关)
+    # 化合物: 从 MID 推算 Z_eff
+
+# ──── RAVE-SIM 仿真参数 ──────────────────────────────────────────────────────
+simulation:
+  # 仿真维度: "1d" (柱对称, 条纹相机) | "2d" (球面波, 分幅相机)
+  dimension: "1d"
+
+  # X射线源
+  source:
+    energy_min_eV: 8000.0       # 光子能量下限 [eV]
+    energy_max_eV: 10000.0      # 光子能量上限 [eV]
+    z_m: 0.0                    # 源 z 位置 [m]
+    x_range_um: [-3.0, 3.0]    # 源 x 范围 [μm]
+    nr_source_points: 100       # Monte Carlo 源采样点数
+    seed: 42
+
+  # 几何
+  geometry:
+    z_target_m: 0.5             # 源到靶第一面距离 [m]
+    z_detector_m: 4.8           # 源到探测器距离 [m]
+    detector_size_x_m: 0.003    # 探测器 x 宽度 [m]
+    detector_pixel_size_x_m: 2.0e-5  # 探测器 x 像素 [m]
+
+  # 计算参数
+  numerics:
+    N: 33554432                 # 总波前采样点 (2^25 级别)
+    dx_m: 3.0e-10               # 横向像素间距 [m]
+    chunk_size: 16777216        # 分块大小 (约 2^24)
+    dtype: "c8"                 # 精度: c8 = complex64, c16 = complex128
+    use_disk_vector: false      # 使用磁盘缓存 (超大仿真)
+
+  # 1D 模式专用
+  one_d:
+    detector_pixel_size_y_m: 2.0e-5
+    # ny 不设 = 自动 1D 柱面波模式
+
+  # 2D 模式专用
+  two_d:
+    ny: 512
+    dy_m: 2.0e-7
+    detector_size_y_m: 0.001
+
+# ──── 输出 ────────────────────────────────────────────────────────────────────
+output:
+  # 结果输出根目录
+  results_dir: "./bridge_output"
+
+  # 子目录命名: 时间戳自动生成 "YYYY/MM/YYYYMMDD_HHMMSSffffff"
+  # 或使用 case 名称
+
+  # 中间网格文件保存
+  keep_grids: true              # 保留生成的 .npy 网格文件
+  grids_subdir: "grids"         # 网格子目录名
+
+  # 结果汇总
+  aggregate:
+    format: "hdf5"              # "hdf5" | "npy"
+    animation: true             # 生成时间演化动画
+    animation_fps: 10
+    diagnostics:                # 计算诊断量
+      visibility: true          # 相衬可见度
+      fringe_shift: true        # 条纹位移 (折射角)
+      peak_intensity: true      # 峰值强度演化
+
+# ──── 并行 ────────────────────────────────────────────────────────────────────
+parallel:
+  max_workers: null             # 并行时间步数 (null = CPU 核数)
+  # 注意: RAVE-SIM (big-wave) 已占用多核, 并行可能竞争资源
+  # 推荐: 对 GPU fast-wave 设 1, 对 big-wave 设 2-4
+
+# ──── 日志 ────────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"                 # DEBUG | INFO | WARNING | ERROR
+  file: "workflow.log"          # 日志文件 (null = 仅 stdout)
