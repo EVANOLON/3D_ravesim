@@ -1,0 +1,10 @@
+{
+  "name": "rave-sim-tools",
+  "version": "0.1.0",
+  "description": "RAVE-SIM GPU simulation tools for the DSH agent: run/status/result-summary + pre-run physics & feasibility checks.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  }
+}
