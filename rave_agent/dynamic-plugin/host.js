@@ -1,8 +1,11 @@
-// RAVE-SIM GPU simulation plugin v9: 6 tools + in-conversation plot viewer RPC
+// RAVE-SIM GPU simulation plugin v10: 7 tools + inline plot/grid viewer RPC
 // (dynamic-plugin host half — kept in sync with the running rave-1/pkg-1)
 const PLOT_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/plot_result.py'
+const GRID_PLOT_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/grid_plot.py'
+const PLOT_SERVER_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/plot_server.py'
 const OUTPUT_ROOT = '/mnt/d/rave-sim-main/rave-sim-main/output'
 const PLOTS_DIR = OUTPUT_ROOT + '/_agent_runs/plots'
+let plotServerBase = null
 
 function bytesToBase64(u8) {
   let bin = ''
@@ -120,6 +123,41 @@ return {
       const r = await runAndCollect(argv, '/', undefined, 65536)
       if (r.outcome.exitCode !== 0) return { error: 'plot failed: ' + ((r.err || r.out).trim().slice(0, 300) || 'exit ' + r.outcome.exitCode) }
       try { return JSON.parse(r.out.trim()) } catch (e) { return { error: 'plot produced invalid JSON: ' + String(e) } }
+    }
+
+    async function makeGridPlot(simDir, gridPath) {
+      const argv = [PYTHON, GRID_PLOT_SCRIPT, '--sim_dir', simDir]
+      if (gridPath) argv.push('--grid', gridPath)
+      const r = await runAndCollect(argv, '/', undefined, 65536)
+      if (r.outcome.exitCode !== 0) return { error: 'grid plot failed: ' + ((r.err || r.out).trim().slice(0, 300) || 'exit ' + r.outcome.exitCode) }
+      try {
+        const j = JSON.parse(r.out.trim())
+        if (j.ok && j.grids && j.grids.length && !j.grids[0].error) {
+          const g = j.grids[0]
+          return { png_path: g.png_path, url: g.url, shape: g.shape, dtype: g.dtype, kind: g.kind, grids: j.grids }
+        }
+        return j
+      } catch (e) { return { error: 'grid plot produced invalid JSON: ' + String(e) } }
+    }
+
+    // Start (or reuse) the inline-plot HTTP server; returns the base URL or ''.
+    async function ensurePlotServer() {
+      if (plotServerBase !== null) return plotServerBase
+      const r = await runAndCollect([PYTHON, PLOT_SERVER_SCRIPT, 'start'], '/', undefined, 8192)
+      try {
+        const j = JSON.parse(r.out.trim())
+        if (j && j.ok && j.url) { plotServerBase = j.url; return plotServerBase }
+      } catch (e) { /* ignore */ }
+      plotServerBase = ''
+      return plotServerBase
+    }
+
+    // Attach the markdown-embeddable http URL to a plot result (png_path present).
+    async function attachPlotUrl(res) {
+      if (!res || res.error || !res.png_path) return res
+      const base = await ensurePlotServer()
+      if (base) res.url = base + '/' + (res.png_path.split('/').filter(Boolean).pop() || '')
+      return res
     }
 
     async function npySummary(path) {
@@ -278,18 +316,32 @@ return {
       })
 
     register('rave_result_plot',
-      'Generate a PNG plot of a result .npy file (e.g. detected.npy) — 1D profile or 2D image, auto-detected. PNG is saved under output/_agent_runs/plots/ and also rendered inline in the conversation card. Returns the PNG path plus numeric summary.',
+      'Generate a PNG plot of a result .npy file (e.g. detected.npy) — 1D profile or 2D image, auto-detected. PNG is saved under output/_agent_runs/plots/, rendered inline in the conversation card, and a markdown-embeddable http `url` is returned. Embed the image in your reply with ![title](url).',
       {
         path: { type: 'string', description: 'Absolute path to a .npy file (e.g. .../00000000/detected.npy)' },
         sim_dir: { type: 'string', description: 'Alternative: simulation directory; detected.npy under 00000000/ is plotted automatically' },
       },
-      { type: 'object', properties: { png_path: { type: 'string' }, shape: { type: 'array', items: { type: 'number' } }, kind: { type: 'string' }, min: { type: 'number' }, max: { type: 'number' }, mean: { type: 'number' } }, additionalProperties: true },
+      { type: 'object', properties: { png_path: { type: 'string' }, url: { type: 'string' }, shape: { type: 'array', items: { type: 'number' } }, kind: { type: 'string' }, min: { type: 'number' }, max: { type: 'number' }, mean: { type: 'number' } }, additionalProperties: true },
       async function (args) {
         const p = String(args.path || '')
         const sd = String(args.sim_dir || '')
         const npyPath = p || (sd ? resolveDetected(sd) : '')
         if (!npyPath) return { error: 'path or sim_dir required' }
-        return makePlot(npyPath, sd || undefined)
+        return attachPlotUrl(await makePlot(npyPath, sd || undefined))
+      })
+
+    register('rave_grid_plot',
+      'Render the sample density/material grid(s) referenced by a simulation directory (config.yaml elements[].grid_path, e.g. the shockwave grid) into PNG(s) under output/_agent_runs/plots/. Returns per-grid png_path, a markdown-embeddable http `url`, shape and numeric stats (grid index range + density range in g/cm³). Embed the image in your reply with ![title](url).',
+      {
+        sim_dir: { type: 'string', description: 'Absolute path of the simulation directory (contains config.yaml)' },
+        grid: { type: 'string', description: 'Optional explicit path to a grid .npy; default: all grids from config.yaml' },
+      },
+      { type: 'object', properties: { ok: { type: 'boolean' }, grids: { type: 'array', items: { type: 'object', additionalProperties: true } } }, additionalProperties: true },
+      async function (args) {
+        const simDir = String(args.sim_dir || '')
+        if (!simDir) return { error: 'sim_dir is required' }
+        await ensurePlotServer()
+        return makeGridPlot(simDir, args.grid ? String(args.grid) : undefined)
       })
 
     // RPC for the in-conversation viewer (Client half calls this)
@@ -297,8 +349,9 @@ return {
       const p = args && args.path ? String(args.path) : ''
       const sd = args && args.sim_dir ? String(args.sim_dir) : ''
       const npyPath = p || (sd ? resolveDetected(sd) : '')
-      if (!npyPath) return { error: 'path or sim_dir required' }
-      const res = await makePlot(npyPath, sd || undefined)
+      const res = (args && args.grid)
+        ? await makeGridPlot(sd, args.grid ? String(args.grid) : undefined)
+        : await makePlot(npyPath, sd || undefined)
       if (res.error || !res.png_path) return { error: res.error || 'no png produced' }
       try {
         const u8 = await fsService.readBytes(await fsService.resolve(res.png_path), undefined, 8 * 1024 * 1024)
@@ -315,6 +368,6 @@ return {
       }
     })
 
-    console.log('[rave-sim] plugin v9 loaded: 6 tools + plot RPC (validate, feasibility, run, status, summary, plot)')
+    console.log('[rave-sim] plugin v10 loaded: 7 tools + plot RPC (validate, feasibility, run, status, summary, plot, grid plot)')
   },
 }

@@ -19,10 +19,12 @@
 
 const HOST_SRC = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/dynamic-plugin/host.js'
 const CLIENT_SRC = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/dynamic-plugin/client.js'
+const PLOT_SERVER_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/plot_server.py'
+const PYTHON = '/home/taylor/anaconda3/envs/rave-sim/bin/python'
 
 export default {
   name: 'rave-sim-tools',
-  inject: ['fs', 'tools', 'dynamicCordisRunner'],
+  inject: ['fs', 'tools', 'subprocess', 'dynamicCordisRunner'],
   apply(ctx) {
     const fsService = ctx.fs
     const tools = ctx.tools
@@ -30,6 +32,29 @@ export default {
 
     function renderText(_args, value) {
       return [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+    }
+
+    async function runScript(argv, maxBytes) {
+      const sub = ctx.get('subprocess')
+      if (sub === undefined) return { error: 'subprocess service unavailable' }
+      let h
+      try {
+        h = sub.spawn({
+          argv, cwd: '/', graceMs: 5000,
+          stdio: {
+            stdin: 'ignore',
+            stdout: { maxBytes: maxBytes || 65536, spill: { maxBytes: 1 << 20 } },
+            stderr: { maxBytes: maxBytes || 65536, spill: { maxBytes: 1 << 20 } },
+          },
+        })
+      } catch (e) {
+        return { error: 'spawn failed: ' + String(e && e.message ? e.message : e) }
+      }
+      let outcome
+      try { outcome = await h.done } catch (e) { outcome = { exitCode: -1, signal: null } }
+      const out = h.collected.stdout ? h.collected.stdout.readFrom(0).text : ''
+      const err = h.collected.stderr ? h.collected.stderr.readFrom(0).text : ''
+      return { outcome, out, err }
     }
 
     // ── rave_plugin_activate ──────────────────────────────────────────────
@@ -111,6 +136,35 @@ export default {
       },
     })
 
-    console.log('[rave-sim-tools] bootstrap registered: rave_plugin_activate, rave_plugin_status')
+    // ── rave_plot_server ──────────────────────────────────────────────────
+    // Available from the first turn (no plugin activation needed): keeps the
+    // inline-plot HTTP server up so result/grid PNGs can be embedded in the
+    // conversation via markdown ![title](http://127.0.0.1:8811/<file>.png).
+    tools.register({
+      name: 'rave_plot_server',
+      description: 'Ensure the RAVE-SIM inline-plot HTTP server is running at http://127.0.0.1:8811 (serves output/_agent_runs/plots). Call once at session start (action ensure). The returned url lets you embed result/grid PNGs directly in the conversation via markdown ![title](url). Also lists the PNGs currently available.',
+      parameters: {
+        action: {
+          type: 'string', enum: ['ensure', 'status', 'stop'],
+          description: 'ensure (default): start the server if it is not running; status: report only; stop: shut the server down',
+        },
+      },
+      output: {
+        schema: { type: 'object', properties: { ok: { type: 'boolean' }, up: { type: 'boolean' }, url: { type: 'string' }, pngs: { type: 'array', items: { type: 'string' } } }, additionalProperties: true },
+        render: renderText,
+      },
+      async execute(args) {
+        const action = args && args.action ? String(args.action) : 'ensure'
+        const r = await runScript([PYTHON, PLOT_SERVER_SCRIPT, action], 8192)
+        if (r.error) return { error: r.error }
+        const text = r.out.trim()
+        if (text) {
+          try { return JSON.parse(text) } catch (e) { /* fall through */ }
+        }
+        return { error: 'plot server script exited ' + r.outcome.exitCode + ': ' + ((r.err || text).slice(0, 500) || '(no output)') }
+      },
+    })
+
+    console.log('[rave-sim-tools] bootstrap registered: rave_plugin_activate, rave_plugin_status, rave_plot_server')
   },
 }

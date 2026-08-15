@@ -7,8 +7,26 @@
 
 | 文件 | 内容 |
 |---|---|
-| `host.js` | Host 半边：6 个工具（validate / feasibility / run / status / summary / plot）+ `rave-plot-png` RPC |
-| `client.js` | Client 半边：`tool.call.toolview` 注册 `rave_result_plot` 卡片，对话窗口内嵌显示 PNG |
+| `host.js` | Host 半边：7 个工具（validate / feasibility / run / status / summary / plot / grid plot）+ `rave-plot-png` RPC |
+| `client.js` | Client 半边：`tool.call.toolview` 注册 `rave_result_plot` / `rave_grid_plot` 卡片，对话窗口内嵌显示 PNG |
+
+## 对话内嵌图片/网格（markdown 方式）
+
+除对话卡片外，所有绘图工具还会返回一个 markdown 可嵌入的 `url`
+（`http://127.0.0.1:8811/<file>.png`）。Agent 在回复里用
+`![标题](url)` 即可直接把图片/网格渲染在对话流中。
+
+- 图床服务：`rave_agent/plot_server.py`（自愈：端口被占则复用，未启动则拉起，
+  服务 `output/_agent_runs/plots/`）。bootstrap 工具 `rave_plot_server` 无需激活，
+  会话第一轮即可调用（persona 已指示每会话启动时 ensure 一次）。
+- 结果图：`rave_result_plot`（调用 `rave_agent/plot_result.py`）。
+- 网格图：`rave_grid_plot`（调用 `rave_agent/grid_plot.py`，读取
+  config.yaml `elements[].grid_path`，材料索引 → 密度 g/cm³ 渲染，2D 网格按
+  (z, x) 约定标注 µm 坐标轴）。
+
+> 预设同步：RAVE-SIM agent preset 的 persona（`~/.dsh/.agent-presets/rave-sim/agent.cordis.yml`）
+> 也包含本功能指令（启动时 `rave_plot_server ensure`、结果用 `![标题](url)` 内嵌）。
+> 该文件在仓库外（DSH 本机配置），重装 preset 时需按本 README 重新同步。
 
 ## 如何激活（推荐：引导器自动激活）
 
