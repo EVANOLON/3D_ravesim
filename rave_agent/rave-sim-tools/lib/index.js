@@ -58,10 +58,15 @@ export default {
     }
 
     // ── rave_plugin_activate ──────────────────────────────────────────────
+    // NOTE: tools.register() stores `parameters` RAW into the model-facing
+    // catalog (no spec compilation — that only happens inside defineTool).
+    // Parameters MUST therefore be full JSON Schema ({type:'object', ...}),
+    // otherwise the model API rejects the tool ("Invalid schema for function
+    // ... got 'type: null'").
     tools.register({
       name: 'rave_plugin_activate',
       description: 'Activate the RAVE-SIM dynamic plugin (6 GPU tools + inline plot viewer) for this session. Reads rave_agent/dynamic-plugin/host.js and client.js, defines a new plugin via dynamicCordisRunner and starts it. If it needs browser approval you will see a Run card; approve it once. Safe to call repeatedly — reuses an existing plugin.',
-      parameters: {},
+      parameters: { type: 'object', properties: {} },
       output: {
         schema: { type: 'object', properties: { ok: { type: 'boolean' }, plugin_id: { type: 'string' }, package_id: { type: 'string' }, run_status: { type: 'string' } }, additionalProperties: true },
         render: renderText,
@@ -112,7 +117,7 @@ export default {
     tools.register({
       name: 'rave_plugin_status',
       description: 'Report whether the RAVE-SIM dynamic plugin is active for this session and list its packages.',
-      parameters: {},
+      parameters: { type: 'object', properties: {} },
       output: {
         schema: { type: 'object', properties: { active: { type: 'boolean' }, plugins: { type: 'array', items: { type: 'object', additionalProperties: true } } }, additionalProperties: true },
         render: renderText,
@@ -144,9 +149,12 @@ export default {
       name: 'rave_plot_server',
       description: 'Ensure the RAVE-SIM inline-plot HTTP server is running at http://127.0.0.1:8811 (serves output/_agent_runs/plots). Call once at session start (action ensure). The returned url lets you embed result/grid PNGs directly in the conversation via markdown ![title](url). Also lists the PNGs currently available.',
       parameters: {
-        action: {
-          type: 'string', enum: ['ensure', 'status', 'stop'],
-          description: 'ensure (default): start the server if it is not running; status: report only; stop: shut the server down',
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string', enum: ['ensure', 'status', 'stop'],
+            description: 'ensure (default): start the server if it is not running; status: report only; stop: shut the server down',
+          },
         },
       },
       output: {
