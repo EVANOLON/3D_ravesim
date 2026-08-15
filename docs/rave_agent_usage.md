@@ -36,6 +36,7 @@ RAVE-SIM Agent 为 DSH 会话提供 5 个工具，覆盖 **X 射线波传播仿�
 - 仿真目录**复制后运行**，绝不修改原 sim 目录
 - 复制目标**只允许** `output/` 目录（白名单，路径规范化防绕过）
 - 仿真在**后台**运行，工具立即返回 `job_id`，用 `rave_sim_status` 轮询
+- **GPU 状态一律用 `rave_feasibility_check` 查询**（内部经 DSH Host 子进程读取真实显存）；不要用 bash 跑 `nvidia-smi`——bash 沙箱隔离 `/dev/dxg` 会误报 "GPU unavailable"
 
 ---
 
