@@ -1,0 +1,2 @@
+name: RAVE-SIM
+description: RAVE-SIM X 射线波传播仿真 Agent（GPU fastwave 运行 + 物理/硬件可行性预检 + 结果读取），基于标准编码 Agent 能力。

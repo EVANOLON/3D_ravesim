@@ -26,7 +26,8 @@
 
 > 预设同步：RAVE-SIM agent preset 的 persona（`~/.dsh/.agent-presets/rave-sim/agent.cordis.yml`）
 > 也包含本功能指令（启动时 `rave_plot_server ensure`、结果用 `![标题](url)` 内嵌）。
-> 该文件在仓库外（DSH 本机配置），重装 preset 时需按本 README 重新同步。
+> 该文件在仓库外（DSH 本机配置），仓库内备份在 `rave_agent/preset/`（含恢复说明）；
+> 修改 preset 后请同步 `cp ~/.dsh/.agent-presets/rave-sim/*.yml rave_agent/preset/` 并 git 提交。
 
 ## 如何激活（推荐：引导器自动激活）
 
