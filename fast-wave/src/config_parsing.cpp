@@ -5,9 +5,74 @@
 #include <config_parsing.hpp>
 #include <plasma_physics.hpp>
 
+#include <algorithm>
+#include <fstream>
+#include <numeric>
+
 std::string stringify_key(const char *key) { return std::string(key); }
 
 std::string stringify_key(int key) { return std::to_string(key); }
+
+// Load a float32/float64 .npy grid and return it as float32, honouring the
+// dtype declared in the npy header. npypp::LoadFull<T> ignores the header's
+// word size and reads sizeof(T) per element, so float64 grids were silently
+// misread as float32 (each double split into two bogus floats) — which turned
+// plasma_sample deltabeta grids into NaN/garbage and produced all-NaN 2D
+// detector outputs. This function is the dtype-aware replacement.
+[[nodiscard]] std::vector<float> load_float_grid(const fs::path &path,
+                                                 std::vector<size_t> &shape_out) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) throw std::runtime_error("cannot open npy grid: " + path.string());
+
+    char magic[6];
+    f.read(magic, 6);
+    if (std::string(magic, 6) != std::string("\x93NUMPY", 6))
+        throw std::runtime_error("not an npy file: " + path.string());
+
+    uint8_t major = 0;
+    uint8_t minor = 0;
+    f.read(reinterpret_cast<char *>(&major), 1);
+    f.read(reinterpret_cast<char *>(&minor), 1);  // version minor byte
+    uint64_t header_len = 0;
+    if (major == 1) {
+        uint16_t hl = 0;
+        f.read(reinterpret_cast<char *>(&hl), 2);
+        header_len = hl;
+    } else if (major == 2) {
+        uint32_t hl = 0;
+        f.read(reinterpret_cast<char *>(&hl), 4);
+        header_len = hl;
+    } else {
+        throw std::runtime_error("unsupported npy major version " + std::to_string(major) +
+                                 " in " + path.string());
+    }
+    std::string header(header_len, '\0');
+    f.read(header.data(), static_cast<std::streamsize>(header_len));
+
+    size_t word_size = 0;
+    char endianness = 0;
+    bool fortran_order = false;
+    std::vector<size_t> shape;
+    npypp::detail::ParseNpyHeader(header, word_size, shape, fortran_order, endianness);
+    if (fortran_order)
+        throw std::runtime_error("fortran-order npy grids are not supported: " + path.string());
+
+    const size_t n = std::accumulate(shape.begin(), shape.end(), size_t(1),
+                                     std::multiplies<size_t>());
+    std::vector<float> out(n);
+    if (word_size == 4) {
+        f.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(n * 4));
+    } else if (word_size == 8) {
+        std::vector<double> tmp(n);
+        f.read(reinterpret_cast<char *>(tmp.data()), static_cast<std::streamsize>(n * 8));
+        for (size_t i = 0; i < n; ++i) out[i] = static_cast<float>(tmp[i]);
+    } else {
+        throw std::runtime_error("unsupported npy word size " + std::to_string(word_size) +
+                                 " in " + path.string());
+    }
+    shape_out = shape;
+    return out;
+}
 
 template <typename Key> [[nodiscard]] double get_scalar(YAML::Node const &node, const Key &key) {
     if (!node[key].IsDefined()) {
@@ -232,26 +297,27 @@ template <typename Key>
         materials.push_back(get_material(materials_node, i));
     }
 
-    // 加载密度网格
+    // 加载密度网格（dtype-aware：float64 网格自动转 float32）
     const std::string density_grid_path = sim_dir / node["density_grid_path"].as<std::string>();
-    npypp::MultiDimensionalArray<float> density_arr = npypp::LoadFull<float>(density_grid_path, false);
+    std::vector<size_t> density_shape;
+    std::vector<float> density_data = load_float_grid(density_grid_path, density_shape);
 
     // 加载材料网格
     const std::string material_grid_path = sim_dir / node["material_grid_path"].as<std::string>();
     npypp::MultiDimensionalArray<uint32_t> material_arr = npypp::LoadFull<uint32_t>(material_grid_path, false);
 
     // 验证网格尺寸一致性
-    if (density_arr.shape[0] != material_arr.shape[0] || density_arr.shape[1] != material_arr.shape[1]) {
+    if (density_shape[0] != material_arr.shape[0] || density_shape[1] != material_arr.shape[1]) {
         throw std::runtime_error("Density grid and material grid must have same dimensions");
     }
 
     // 关键修改：预先计算deltabeta网格
     // 参考Python版本：为每个像素计算实际的deltabeta值
     std::vector<Complex<double>> deltabeta_grid;
-    deltabeta_grid.reserve(density_arr.data.size());
+    deltabeta_grid.reserve(density_data.size());
     
-    const std::size_t z_len = density_arr.shape[0];
-    const std::size_t x_len = density_arr.shape[1];
+    const std::size_t z_len = density_shape[0];
+    const std::size_t x_len = density_shape[1];
     
     spdlog::info("Precomputing deltabeta grid for precise_sample: {} x {}", z_len, x_len);
     
@@ -259,7 +325,7 @@ template <typename Key>
         for (std::size_t x = 0; x < x_len; ++x) {
             const std::size_t idx = z * x_len + x;
             const uint32_t material_idx = material_arr.data[idx];
-            const float density = density_arr.data[idx];
+            const float density = density_data[idx];
             
             if (material_idx == 0) {
                 // 真空
@@ -307,7 +373,7 @@ template <typename Key>
     ps.type = OpticalElementType::PreciseSample;
     ps.pixel_size_x = pixel_size_x;
     ps.pixel_size_z = pixel_size_z;
-    ps.density_grid = std::move(density_arr.data);
+    ps.density_grid = std::move(density_data);
     ps.material_grid = std::move(material_arr.data);
     ps.deltabeta_grid = std::move(deltabeta_grid);  // 新增：存储预先计算的deltabeta网格
     ps.z_len = z_len;
@@ -335,29 +401,31 @@ template <typename Key>
     }
     const int Z = node["Z"].as<int>();
 
-    auto ne_arr = npypp::LoadFull<float>(sim_dir / node["ne_grid_path"].as<std::string>());
-    auto ni_arr = npypp::LoadFull<float>(sim_dir / node["ni_grid_path"].as<std::string>());
-    auto te_arr = npypp::LoadFull<float>(sim_dir / node["te_grid_path"].as<std::string>());
-    auto zs_arr = npypp::LoadFull<float>(sim_dir / node["zstar_grid_path"].as<std::string>());
+    // dtype-aware loading: npypp::LoadFull<float> would misread float64 grids.
+    std::vector<size_t> ne_shape, ni_shape, te_shape, zs_shape;
+    auto ne_data = load_float_grid(sim_dir / node["ne_grid_path"].as<std::string>(), ne_shape);
+    auto ni_data = load_float_grid(sim_dir / node["ni_grid_path"].as<std::string>(), ni_shape);
+    auto te_data = load_float_grid(sim_dir / node["te_grid_path"].as<std::string>(), te_shape);
+    auto zs_data = load_float_grid(sim_dir / node["zstar_grid_path"].as<std::string>(), zs_shape);
 
-    if (ne_arr.shape.size() != ni_arr.shape.size() ||
-        ne_arr.shape.size() != te_arr.shape.size() ||
-        ne_arr.shape.size() != zs_arr.shape.size()) {
+    if (ne_shape.size() != ni_shape.size() ||
+        ne_shape.size() != te_shape.size() ||
+        ne_shape.size() != zs_shape.size()) {
         throw std::runtime_error("plasma_sample grid shape ranks differ");
     }
-    for (std::size_t d = 0; d < ne_arr.shape.size(); ++d) {
-        if (ne_arr.shape[d] != ni_arr.shape[d] ||
-            ne_arr.shape[d] != te_arr.shape[d] ||
-            ne_arr.shape[d] != zs_arr.shape[d]) {
+    for (std::size_t d = 0; d < ne_shape.size(); ++d) {
+        if (ne_shape[d] != ni_shape[d] ||
+            ne_shape[d] != te_shape[d] ||
+            ne_shape[d] != zs_shape[d]) {
             throw std::runtime_error("plasma_sample grid shape mismatch at dim " + std::to_string(d));
         }
     }
 
     std::size_t z_len, y_len, x_len;
-    if (ne_arr.shape.size() == 2) {
-        z_len = ne_arr.shape[0]; y_len = 1; x_len = ne_arr.shape[1];
-    } else if (ne_arr.shape.size() == 3) {
-        z_len = ne_arr.shape[0]; y_len = ne_arr.shape[1]; x_len = ne_arr.shape[2];
+    if (ne_shape.size() == 2) {
+        z_len = ne_shape[0]; y_len = 1; x_len = ne_shape[1];
+    } else if (ne_shape.size() == 3) {
+        z_len = ne_shape[0]; y_len = ne_shape[1]; x_len = ne_shape[2];
     } else {
         throw std::runtime_error("plasma_sample grids must be 2D (z,x) or 3D (z,y,x)");
     }
@@ -370,10 +438,10 @@ template <typename Key>
     ps.pixel_size_x = pixel_size_x;
     ps.pixel_size_y = pixel_size_y;
     ps.pixel_size_z = pixel_size_z;
-    ps.ne_grid = std::move(ne_arr.data);
-    ps.ni_grid = std::move(ni_arr.data);
-    ps.te_grid = std::move(te_arr.data);
-    ps.zstar_grid = std::move(zs_arr.data);
+    ps.ne_grid = std::move(ne_data);
+    ps.ni_grid = std::move(ni_data);
+    ps.te_grid = std::move(te_data);
+    ps.zstar_grid = std::move(zs_data);
     ps.Z = Z;
     ps.x_len = x_len;
     ps.y_len = y_len;
