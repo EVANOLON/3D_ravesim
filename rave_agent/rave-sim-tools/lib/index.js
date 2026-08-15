@@ -1,22 +1,30 @@
 // RAVE-SIM tools — persisted Cordis plugin (static npm-package form).
 //
-// Registers 5 model tools:
+// Registers 6 model tools:
 //   rave_config_validate   — physics/logic checks on a sim directory
 //   rave_feasibility_check — validate + GPU/disk/runtime feasibility
 //   rave_sim_run           — copy sim dir, force feasibility gate, spawn fastwave
 //   rave_sim_status        — poll a background job
 //   rave_result_summary    — read .npy summary stats
+//   rave_result_plot       — render .npy to a PNG under output/_agent_runs/plots/
 //
 // Static plugins run inside the DSH host process, so subprocess children
 // inherit the host's /dev and can reach the GPU (verified in the dynamic
 // prototype). No sandbox escalation is needed inside the tool itself.
+//
+// Note: the in-conversation inline viewer (Client half) exists only in the
+// dynamic plugin form (see rave_agent/dynamic-plugin-full.js); static plugins
+// cannot load browser dependencies, so the persisted form saves the PNG and
+// returns its path for the file panel / new-window viewing.
 
 const PYTHON = '/home/taylor/anaconda3/envs/rave-sim/bin/python'
 const VALIDATE_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/validate_sim.py'
+const PLOT_SCRIPT = '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/plot_result.py'
 const DEFAULT_FASTWAVE = '/mnt/d/rave-sim-main/rave-sim-main/fast-wave/build-Release/fastwave'
 // Copy whitelist: simulation copies may only be written under OUTPUT_ROOT.
 const OUTPUT_ROOT = '/mnt/d/rave-sim-main/rave-sim-main/output'
 const AGENT_RUNS_DIR = OUTPUT_ROOT + '/_agent_runs'
+const PLOTS_DIR = AGENT_RUNS_DIR + '/plots'
 const NVIDIA_SMI_CANDIDATES = [
   '/usr/lib/wsl/lib/nvidia-smi',
   '/usr/bin/nvidia-smi',
@@ -125,6 +133,23 @@ export default {
         } catch (e) { /* not JSON; fall through to error */ }
       }
       return { error: 'validator exited ' + r.outcome.exitCode + ': ' + ((r.err || text).slice(0, 500) || '(no output)') }
+    }
+
+    // Render an .npy result to a PNG under output/_agent_runs/plots/.
+    async function makePlot(npyPath, simDir) {
+      const base = (npyPath.split('/').filter(Boolean).pop() || 'result').replace(/\.npy$/i, '')
+      const out = PLOTS_DIR + '/' + base + '_' + Date.now() + '.png'
+      const argv = [PYTHON, PLOT_SCRIPT, '--path', npyPath, '--out', out]
+      if (simDir) argv.push('--sim_dir', simDir)
+      const r = await runAndCollect(argv, '/', undefined, 65536)
+      if (r.outcome.exitCode !== 0) {
+        return { error: 'plot failed: ' + ((r.err || r.out).trim().slice(0, 300) || 'exit ' + r.outcome.exitCode) }
+      }
+      try { return JSON.parse(r.out.trim()) } catch (e) { return { error: 'plot produced invalid JSON: ' + String(e) } }
+    }
+
+    function resolveDetected(simDir) {
+      return String(simDir).replace(/\/+$/, '') + '/00000000/detected.npy'
     }
 
     async function npySummary(path) {
@@ -335,6 +360,27 @@ export default {
         } catch (e) {
           return { error: String(e && e.message ? e.message : e) }
         }
+      },
+    })
+
+    // ── rave_result_plot ──────────────────────────────────────────────────
+    tools.register({
+      name: 'rave_result_plot',
+      description: 'Generate a PNG plot of a result .npy file (e.g. detected.npy) — 1D profile or 2D image, auto-detected. PNG is saved under output/_agent_runs/plots/ (open it in the file panel / new window). Returns the PNG path plus numeric summary.',
+      parameters: objSchema({
+        path: { type: 'string', description: 'Absolute path to a .npy file (e.g. .../00000000/detected.npy)' },
+        sim_dir: { type: 'string', description: 'Alternative: simulation directory; detected.npy under 00000000/ is plotted automatically' },
+      }),
+      output: {
+        schema: { type: 'object', properties: { png_path: { type: 'string' }, shape: { type: 'array', items: { type: 'number' } }, kind: { type: 'string' }, min: { type: 'number' }, max: { type: 'number' }, mean: { type: 'number' } }, additionalProperties: true },
+        render: renderText,
+      },
+      async execute(args) {
+        const p = String(args.path || '')
+        const sd = String(args.sim_dir || '')
+        const npyPath = p || (sd ? resolveDetected(sd) : '')
+        if (!npyPath) return { error: 'path or sim_dir required' }
+        return makePlot(npyPath, sd || undefined)
       },
     })
 

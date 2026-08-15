@@ -16,6 +16,7 @@ RAVE-SIM Agent 为 DSH 会话提供 5 个工具，覆盖 **X 射线波传播仿�
 | `rave_sim_run` | 前置门 → 白名单复制 → GPU 后台运行 fastwave | ✅ 可用 |
 | `rave_sim_status` | 轮询后台 job（状态/日志/退出码） | ✅ 可用 |
 | `rave_result_summary` | 读取 npy 结果统计（shape/dtype/min/max/mean） | ✅ 可用 |
+| `rave_result_plot` | 渲染 npy 为 PNG（1D 曲线 / 2D 热图自动识别） | ✅ 可用 |
 
 **设计原则**：
 - 仿真执行前**强制**物理 + 硬件可行性检查（不通过拒绝启动）
@@ -113,6 +114,16 @@ wsl --shutdown
 
 **输入**：`.npy` 文件路径 → **输出**：`{ shape, dtype, min, max, mean, head }`（只返回统计，安全读取大数组）
 
+### 3.6 `rave_result_plot` — 结果可视化
+
+**输入**：`path`（npy 路径）或 `sim_dir`（自动取 `00000000/detected.npy`）
+
+**两种展示方式**：
+1. **对话窗口内嵌**（动态插件形态，需重新激活，见 `rave_agent/dynamic-plugin/README.md`）：工具卡片直接显示 1D 曲线 / 2D 热图
+2. **新窗口 / 文件查看**（所有形态）：PNG 落盘 `output/_agent_runs/plots/<name>_<ts>.png`，返回路径可随时打开
+
+**输出**：`{ png_path, shape, dtype, kind: "1d"|"2d", min, max, mean }`
+
 ---
 
 ## 4. 端到端工作流示例
@@ -180,7 +191,60 @@ rave_agent/                                   # 项目内（已 git 跟踪）
 
 ---
 
-## 8. 已知限制与后续
+## 8. 更新与维护（SOP）
+
+### 8.1 更新机制速查
+
+| 组件 | 加载方式 | 修改后何时生效 |
+|---|---|---|
+| `validate_sim.py` | 每次工具调用新起 python 进程执行 | **改完立即生效**（无需重启） |
+| `rave-sim-tools/lib/index.js` | preset 按文件路径引用，会话启动时加载 | 重启/新会话生效；当前会话不热更新 |
+| `agent.cordis.yml`（预设） | 会话启动时 mount | 重启/新会话生效 |
+| 动态插件（当前会话 `rave-1`） | 进程内 immutable package | 必须 `cordis_define` 新版本 + `cordis_run update` |
+
+### 8.2 按变更类型的操作流程
+
+**场景 A：改校验逻辑（`validate_sim.py`）—— 零重启**
+
+```bash
+# 编辑 rave_agent/validate_sim.py
+/home/taylor/anaconda3/envs/rave-sim/bin/python rave_agent/validate_sim.py --validate <sim_dir>   # 独立验证
+git add rave_agent/validate_sim.py && git commit -m "feat: ..."
+```
+当前会话与重启后均立即生效。
+
+**场景 B：改工具逻辑（`rave-sim-tools/lib/index.js`）**
+
+```bash
+# 编辑 lib/index.js
+node --input-type=module -e "await import('file:///mnt/d/rave-sim-main/rave-sim-main/rave_agent/rave-sim-tools/lib/index.js')"  # 语法验证
+git add rave_agent/rave-sim-tools/ && git commit -m "feat: ..."
+# 重启 DSH → 新会话（RAVE-SIM preset）自动加载新版
+```
+
+**场景 C：新增工具** — 在 `lib/index.js` 加 `tools.register({...})`，按场景 B 验证提交；若需要预设配置再改 `agent.cordis.yml`；重启后新会话自动多出工具。
+
+**场景 D：当前会话立即用新版（同步动态插件）**
+
+动态插件为不可变 package，需追加版本：
+```
+1. cordis_define（kind: existing, pluginId: rave-1）→ 得到新 packageId
+2. cordis_run（mode: update, packageId: 新id）→ 新 Run 激活
+```
+⚠️ update 会终止旧 Run 的进行中 job，长任务先等跑完。
+
+### 8.3 更新后验证清单
+
+| 层级 | 方法 |
+|---|---|
+| JS 语法 | `node --input-type=module -e "await import('file://...lib/index.js')"` |
+| 校验逻辑 | 直接跑 `validate_sim.py --validate/--feasibility <sim>` |
+| 预设可挂载 | 新会话选 RAVE-SIM 直接试（或临时插件调 `standingKeyFor`） |
+| 端到端 | `rave_sim_run` 跑小 sim（或 `skip_check` 快速验证） |
+
+---
+
+## 9. 已知限制与后续
 
 - 当前覆盖**执行环节**（5 工具）；全流程（材料查询/网格生成/配置构建/物理验证/报告）见 `docs/rave_agent_mcp_design.md`（v1）与 `docs/rave_agent_mcp_design_DSH_调整.md`（v2）
 - job 注册表在内存：DSH 重启后无法恢复进行中的任务（可接受：仿真写入 detected.npy 即算完成，副本可复查）
