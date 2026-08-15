@@ -5,6 +5,19 @@
 
 ---
 
+## 0. 协作约定（重要）
+
+**热更新后必须提醒固化**：每次通过动态插件完成热更新（`cordis_define` 追加版本 / `cordis_run update`）后，
+Agent 必须主动询问用户是否需要固化，固化清单：
+
+1. 工具逻辑同步进 `rave_agent/rave-sim-tools/lib/index.js`（重启后 preset 加载新版）
+2. 动态插件源码更新 `rave_agent/dynamic-plugin/host.js` + `client.js`（如需内嵌查看器）
+3. `git commit`（可选但推荐）
+
+用户回复"不固化"时，热更新成果仅存于当前进程，重启后丢失（需用户知晓）。
+
+---
+
 ## 1. 简介
 
 RAVE-SIM Agent 为 DSH 会话提供 5 个工具，覆盖 **X 射线波传播仿真的执行环节**：
