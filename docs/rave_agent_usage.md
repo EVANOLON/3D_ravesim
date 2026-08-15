@@ -53,8 +53,12 @@ wsl --shutdown
 ### 2.2 新建会话并选择 RAVE-SIM 预设
 
 1. 在 dsh web 界面**新建会话**
-2. 预设/模式选择器中选 **`RAVE-SIM`**（基于"标准模式"全能力 + 仿真工具）
-3. 会话创建后 5 个工具**自动注册**，无需手动激活
+2. 预设/模式选择器中选 **`RAVE-SIM`**（基于"标准模式"全能力 + 仿真引导器）
+3. 会话第一轮 agent **自动调用 `rave_plugin_activate`** 激活完整动态插件：
+   - **首次**：会出现 Run 卡片，**批准一次**（Client 半边）→ 6 工具 + 内嵌查看器生效
+   - **后续**：插件已激活则跳过
+
+> 激活前仅有引导工具（`rave_plugin_activate` / `rave_plugin_status`）；激活后获得全部 6 个业务工具。
 
 ### 2.3 验证就绪
 
@@ -181,8 +185,8 @@ rave_agent/                                   # 项目内（已 git 跟踪）
 ```
 
 **两种形态（同一套工具逻辑）**：
-- **持久 preset**（`RAVE-SIM`）：重启后新会话自动获得工具 ← **日常使用选这个**
-- **动态插件**（当前会话内，进程级）：`cordis_run` 激活，重启消失
+- **静态引导器**（`rave_agent/rave-sim-tools/`，RAVE-SIM preset 自带）：只注册 `rave_plugin_activate` / `rave_plugin_status`——重启后新会话第一轮自动激活完整插件（persona 引导）
+- **动态插件本体**（`rave_agent/dynamic-plugin/`：host.js + client.js）：6 业务工具 + 内嵌查看器，由引导器定义并运行；进程内热更新迭代（`cordis_define` + `cordis_run`）
 
 **依赖环境**：
 - Python 3.11 conda 环境 `rave-sim`（含 bfpy、numpy、ruamel.yaml）
