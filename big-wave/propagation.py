@@ -510,48 +510,70 @@ def square_and_downsample_2d(
     u: Vector, sim_params: SimParams, current_z: float
 ) -> np.ndarray:
     """
-    2D detector output via histogram2d binning.
+    2D detector output, replicating fast-wave's ``square_and_downsample_2d_kernel``
+    exactly (fast-wave/fwcuda/kernels.cu:517):
 
-    Maps the wavefield flat array (ny × nx) onto a 2D detector grid
-    using np.histogram2d, then applies geometric correction (cos_angle / r).
-    Matches fast-wave's ``square_and_downsample_2d_kernel``.
+      * pixel-centre anchoring:  x_det = (ix - outsize_x/2) * ds_px
+      * index ranges with truncation toward zero:
+            i_min = clamp(trunc((x_det - ds_px/2)/dx) + nx/2, 0, nx)
+            i_max = clamp(trunc((x_det + ds_px/2)/dx) + nx/2, 0, nx)
+      * rectangle sum over [i_min,i_max) x [j_min,j_max) computed with a 2D
+        prefix sum (inclusion-exclusion), matching the kernel's summation order
+      * geometric factor dx*dy*cos_angle with cos_angle = current_z / r,
+        r = sqrt(x_det^2 + y_det^2 + current_z^2)   (no extra 1/r factor)
+
+    NOTE (engine alignment): this replaces the previous np.histogram2d binning,
+    which differed from fast-wave in three ways: (1) an extra 1/r geometric
+    factor, (2) bin-edge anchoring (half-pixel offset), (3) coordinate binning
+    instead of truncated index ranges. The detector images of both engines now
+    agree pixel-for-pixel (including the same count-map sampling pattern, which
+    rave_agent/correct_countmap.py removes afterwards).
     """
     nx = sim_params.nx
     ny = sim_params.ny
     dx = sim_params.dx
     dy = sim_params.get_dy()
+    ds_px = sim_params.detector_pixel_size_x
+    ds_py = sim_params.detector_pixel_size_y
 
-    outsize_x = int(sim_params.get_detector_size_x() // sim_params.detector_pixel_size_x)
-    outsize_y = int(sim_params.get_detector_size_y() // sim_params.detector_pixel_size_y)
+    outsize_x = int(sim_params.get_detector_size_x() // ds_px)
+    outsize_y = int(sim_params.get_detector_size_y() // ds_py)
     assert outsize_x <= nx
     assert outsize_y <= ny
 
-    half_x = outsize_x * sim_params.detector_pixel_size_x / 2
-    half_y = outsize_y * sim_params.detector_pixel_size_y / 2
+    def index_ranges(out_n: int, grid_n: int, ds: float, d: float):
+        """Per-pixel covered grid-index range, replicating the CUDA kernel."""
+        p = np.arange(out_n, dtype=np.float64)
+        x_det = (p - out_n // 2) * ds
+        lo = np.trunc((x_det - ds * 0.5) / d).astype(np.int64) + grid_n // 2
+        hi = np.trunc((x_det + ds * 0.5) / d).astype(np.int64) + grid_n // 2
+        return np.clip(lo, 0, grid_n), np.clip(hi, 0, grid_n)
 
-    out = np.zeros((outsize_y, outsize_x), dtype=np.float64)
+    lo_x, hi_x = index_ranges(outsize_x, nx, ds_px, dx)
+    lo_y, hi_y = index_ranges(outsize_y, ny, ds_py, dy)
+
+    # |u|^2 as (ny, nx) row-major array
+    w = np.empty(nx * ny, dtype=np.float64)
 
     def f(idx: int, chunk: np.ndarray) -> None:
-        nonlocal out
-        flat = idx + np.arange(len(chunk), dtype=np.int64)
-        ix = flat % nx
-        iy = flat // nx
-        x = (ix - nx / 2) * dx
-        y = (iy - ny / 2) * dy
-        weights = chunk.real * chunk.real + chunk.imag * chunk.imag
-
-        out += np.histogram2d(
-            y, x,
-            bins=(outsize_y, outsize_x),
-            range=[[-half_y, half_y], [-half_x, half_x]],
-            weights=weights,
-        )[0]
+        w[idx:idx + len(chunk)] = chunk.real * chunk.real + chunk.imag * chunk.imag
 
     u.read_chunked(sim_params.chunk_size, f)
+    W = w.reshape(ny, nx)
 
-    x_det = (np.arange(outsize_x) - outsize_x / 2) * sim_params.detector_pixel_size_x
-    y_det = (np.arange(outsize_y) - outsize_y / 2) * sim_params.detector_pixel_size_y
+    # 2D prefix sum: S[j+1, i+1] = sum of W over rows <= j, cols <= i
+    S = np.zeros((ny + 1, nx + 1), dtype=np.float64)
+    S[1:, 1:] = np.cumsum(np.cumsum(W, axis=1), axis=0)
+    del W, w
+
+    # rectangle sums over [lo_x[p], hi_x[p]) x [lo_y[q], hi_y[q])
+    out = (S[np.ix_(hi_y, hi_x)] - S[np.ix_(lo_y, hi_x)]
+           - S[np.ix_(hi_y, lo_x)] + S[np.ix_(lo_y, lo_x)])
+    del S
+
+    # geometric factor: dx*dy*cos_angle, cos_angle = current_z / r (kernel parity)
+    x_det = (np.arange(outsize_x) - outsize_x // 2) * ds_px
+    y_det = (np.arange(outsize_y) - outsize_y // 2) * ds_py
     X, Y = np.meshgrid(x_det, y_det)
     r = np.sqrt(X**2 + Y**2 + current_z**2)
-    cos_angle = current_z / r
-    return out * cos_angle / r * dx * dy
+    return out * (current_z / r) * dx * dy
