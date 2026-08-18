@@ -542,6 +542,15 @@ class Sample(OpticalElement):
                 x_idx = x / self.pixel_size_x
                 y_idx = y / dy_s
 
+                # fast-wave parity (apply_sample_factors_2d_kernel): pixels whose
+                # coordinate maps outside the grid [0, x_len-1) x [0, y_len-1) are
+                # left unmodified (vacuum). The previous clamp wrongly applied the
+                # edge material to the whole region outside the sample grid.
+                inside = (
+                    (x_idx >= 0.0) & (x_idx < float(x_len) - 1.0)
+                    & (y_idx >= 0.0) & (y_idx < float(y_len) - 1.0)
+                )
+
                 # Bilinear interpolation with edge clamping
                 x_floor = np.floor(x_idx).astype(np.int64)
                 y_floor = np.floor(y_idx).astype(np.int64)
@@ -561,6 +570,9 @@ class Sample(OpticalElement):
                 db_y0 = db_00 * (1.0 - x_frac) + db_01 * x_frac
                 db_y1 = db_10 * (1.0 - x_frac) + db_11 * x_frac
                 interpolated_db = db_y0 * (1.0 - y_frac) + db_y1 * y_frac
+
+                # Outside the grid: vacuum (deltabeta = 0 -> factor = 1)
+                interpolated_db = np.where(inside, interpolated_db, 0.0 + 0.0j)
 
                 chunk *= material_factor(interpolated_db, self.pixel_size_z, sim_params.wl)
 
