@@ -269,3 +269,6 @@
 # inside the DSH host process and therefore reach /dev/dxg (the GPU).
 - id: rave-sim-tools
   name: '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/rave-sim-tools/lib/index.js'
+
+- id: multi1d-bridge-tools
+  name: '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/multi1d-bridge-tools/lib/index.js'

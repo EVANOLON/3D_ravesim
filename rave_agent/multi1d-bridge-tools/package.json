@@ -1,0 +1,10 @@
+{
+  "name": "multi1d-bridge-tools",
+  "version": "0.1.0",
+  "description": "DSH tools that bridge Multi1D++ radiation-hydrodynamics ASCII output into RAVE-SIM grid inputs (PlasmaSample / precise_Sample) and a config.yaml. Wraps rave_agent/multi1d_loader.py, plasma_grid_builder.py, rave_config_gen.py.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  }
+}
