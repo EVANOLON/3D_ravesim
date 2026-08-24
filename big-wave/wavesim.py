@@ -7,11 +7,16 @@ import shutil
 import numpy as np
 from typing import Optional, Tuple
 
+from checkpoint import RunCheckpoint
 from history import History, propagate_with_history, propagate_with_history_2d
 from optical_element import DeltabetaTable, OpticalElement
 from propagation import SimParams, square_and_downsample, square_and_downsample_2d, propagate, propagate_2d
 from source import Source
 from vector import DiskVector, NumpyVector, Vector
+
+# Runtime checkpoint cadence: save every N-th sample slice (u+U copies are
+# multiple GiB at large grids; per-slice saving would dominate runtime).
+CHECKPOINT_SLICE_CADENCE = 5
 
 logger = logging.getLogger("big-wave")
 
@@ -94,6 +99,8 @@ def run_simulation(
     save_final_u_vectors: bool,
     history: Optional[Tuple[History, float]] = None,
     save_keypoints_path: Optional[Path] = None,
+    checkpoint: Optional[RunCheckpoint] = None,
+    resume_checkpoint: bool = False,
 ) -> list[np.ndarray]:
     """
     Run the simulation for one source.
@@ -133,6 +140,10 @@ def run_simulation(
     save_keypoints_path : Optional[Path]
         If set, keypoints (full u vectors) will be saved to this directory. See documentation of `save_keypoint()` for
         more details.
+
+    checkpoint : Optional[RunCheckpoint]
+        Transactional runtime checkpoint. This is independent from the
+        in-memory phase-stepping ``Snapshot`` and stores both u and U.
     """
 
     z_tolerance = 1e-8
@@ -145,19 +156,50 @@ def run_simulation(
     for el in elements:
         el.store_deltabetas(deltabeta_table)
 
+    if checkpoint is not None and any(len(el.x_positions) > 1 for el in elements):
+        raise ValueError(
+            "runtime checkpointing is not supported together with phase stepping; "
+            "phase Snapshot state is intentionally separate"
+        )
+
     ######## Initialize u vector ########
 
-    cutoff_freq = cutoff_frequencies[0]
-
-    current_z = elements[0].z_start if len(elements) > 0 else params.z_detector
-    source.propagate_to(current_z, params, cutoff_freq, u, U, history)
+    resume_slice = 0
+    u_fourier_valid = False
+    if resume_checkpoint:
+        if checkpoint is None or not checkpoint.exists:
+            raise ValueError("resume_checkpoint requested but no ready checkpoint exists")
+        state = checkpoint.load(u, U)
+        if state.phase_step != 0:
+            raise ValueError("only phase_step=0 runtime checkpoints are supported")
+        current_z = state.current_z
+        start_element_idx = state.element_index
+        resume_slice = state.slice_index
+        u_fourier_valid = state.u_fourier_valid
+        cutoff_index = start_element_idx + (1 if resume_slice > 0 else 0)
+        cutoff_freq = cutoff_frequencies[min(cutoff_index, len(cutoff_frequencies) - 1)]
+        logger.info(
+            "Resuming checkpoint at z=%sm, element=%s, slice=%s",
+            current_z, start_element_idx, resume_slice,
+        )
+    else:
+        cutoff_freq = cutoff_frequencies[0]
+        current_z = elements[0].z_start if len(elements) > 0 else params.z_detector
+        source.propagate_to(current_z, params, cutoff_freq, u, U, history)
+        start_element_idx = 0
+        if checkpoint is not None:
+            checkpoint.save(
+                u, U, current_z=current_z, element_index=0, slice_index=0,
+                u_fourier_valid=False, stage="source_propagated",
+            )
 
     ######## Apply optical elements (gratings and samples) ########
 
     snapshot: Optional[Snapshot] = None
 
-    for el_idx, el in enumerate(elements):
-        if current_z < el.z_start:
+    for el_idx, el in enumerate(elements[start_element_idx:], start=start_element_idx):
+        element_start_slice = resume_slice if el_idx == start_element_idx else 0
+        if element_start_slice == 0 and current_z < el.z_start:
             logger.info(f"Propagating from z {current_z}m to {el.z_start}m")
             if params.is_2d:
                 propagate_with_history_2d(
@@ -168,7 +210,12 @@ def run_simulation(
                     u, U, params, el.z_start - current_z, cutoff_freq, current_z, False, history,
                 )
 
-        current_z = el.z_start
+            u_fourier_valid = True
+
+        if element_start_slice == 0:
+            current_z = el.z_start
+        elif not params.is_2d:
+            raise ValueError("slice-level checkpoint resume is only supported for 2D Sample/PlasmaSample")
 
         if len(el.x_positions) > 1 and snapshot is None:
             logger.info(f"Taking snapshot at z={current_z}")
@@ -187,13 +234,42 @@ def run_simulation(
         logger.info(
             f"Applying optical element {el_idx + 1}/{len(elements)} ({element_name})"
         )
-        el.apply(
-            u, U, params, cutoff_freq, 0, history[0] if history is not None else None
-        )
+        if element_start_slice > 0:
+            setattr(el, "_checkpoint_start_slice", element_start_slice)
+
+        if checkpoint is not None:
+            # Save every CHECKPOINT_SLICE_CADENCE-th slice (plus slice 0 from the
+            # source stage) to bound checkpoint I/O: a full u+U copy is multiple
+            # GiB at large grids, so per-slice saving would dominate the runtime.
+            def checkpoint_slice(next_slice: int, slice_z: float) -> None:
+                if next_slice % CHECKPOINT_SLICE_CADENCE != 0:
+                    return
+                checkpoint.save(
+                    u, U, current_z=slice_z, element_index=el_idx,
+                    slice_index=next_slice, u_fourier_valid=True,
+                    stage="element_slice",
+                )
+            setattr(el, "_checkpoint_callback", checkpoint_slice)
+
+        try:
+            el.apply(
+                u, U, params, cutoff_freq, 0, history[0] if history is not None else None
+            )
+        finally:
+            for runtime_attribute in ("_checkpoint_start_slice", "_checkpoint_callback"):
+                if hasattr(el, runtime_attribute):
+                    delattr(el, runtime_attribute)
 
         save_keypoint(save_keypoints_path, el_idx, 1, u)
 
         current_z = el.z_start + el.get_thickness()
+        u_fourier_valid = True
+        resume_slice = 0
+        if checkpoint is not None:
+            checkpoint.save(
+                u, U, current_z=current_z, element_index=el_idx + 1,
+                slice_index=0, u_fourier_valid=True, stage="element_complete",
+            )
 
     ######## Cover remaining distance to the detector ########
 
@@ -204,7 +280,7 @@ def run_simulation(
         # FFT of u afterwards, but OpticalElement.apply does. We can therefore
         # skip the FFT calculation only if the previous step wasn't a source
         # propagation step.
-        skip_fft = len(elements) > 0
+        skip_fft = u_fourier_valid
         if params.is_2d:
             propagate_with_history_2d(
                 u, U, params,
@@ -217,6 +293,15 @@ def run_simulation(
                 params.z_detector - current_z, cutoff_freq, current_z,
                 skip_fft=skip_fft, history=history,
             )
+        current_z = params.z_detector
+        u_fourier_valid = True
+
+    if checkpoint is not None:
+        checkpoint.save(
+            u, U, current_z=current_z, element_index=len(elements),
+            slice_index=0, u_fourier_valid=u_fourier_valid,
+            stage="detector_ready",
+        )
 
     ######## Result ########
 

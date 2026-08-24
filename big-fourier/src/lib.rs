@@ -1,9 +1,9 @@
 //! Copyright (c) 2024, ETH Zurich
 
-
 #![doc = include_str!("../Readme.md")]
 
 pub mod bfft;
+pub mod bfft2;
 pub mod npy;
 
 use std::{
@@ -16,7 +16,10 @@ use bytemuck::{cast_slice, cast_slice_mut, Pod};
 use npy::{read_header, NpyHeader};
 use num_complex::Complex;
 use numpy::{Complex32, Complex64, PyArray1};
-use pyo3::{exceptions::PyValueError, prelude::*};
+use pyo3::{
+    exceptions::{PyInterruptedError, PyValueError},
+    prelude::*,
+};
 use rustfft::FftDirection;
 use rustix::fs::{fadvise, Advice};
 
@@ -124,6 +127,181 @@ fn ifft_c8(infile: PathBuf, outfile: PathBuf, scratchfile: PathBuf) -> PyResult<
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(())
+}
+
+fn cancellation_requested(py: Python<'_>, token: &PyObject) -> PyResult<bool> {
+    let token = token.as_ref(py);
+    for attribute in ["is_cancelled", "is_set", "cancelled"] {
+        if let Ok(value) = token.getattr(attribute) {
+            if value.is_callable() {
+                return value.call0()?.is_true();
+            }
+            return value.is_true();
+        }
+    }
+    if token.is_callable() {
+        return token.call0()?.is_true();
+    }
+    token.is_true()
+}
+
+fn run_fft2<T>(
+    py: Python<'_>,
+    infile: PathBuf,
+    outfile: PathBuf,
+    scratchfile: PathBuf,
+    nx: usize,
+    ny: usize,
+    progress_cb: Option<PyObject>,
+    cancel_token: Option<PyObject>,
+    memory_budget_bytes: Option<usize>,
+    direction: FftDirection,
+) -> PyResult<()>
+where
+    T: rustfft::FftNum + num_traits::Float + Pod + Send + Sync + 'static,
+{
+    let budget = memory_budget_bytes.unwrap_or(bfft2::DEFAULT_MEMORY_BUDGET_BYTES);
+    let result = py.allow_threads(move || {
+        bfft2::fft2::<T, _>(
+            &infile,
+            &outfile,
+            &scratchfile,
+            nx,
+            ny,
+            direction,
+            budget,
+            |pass, completed, total| {
+                Python::with_gil(|py| -> PyResult<()> {
+                    if pass != "complete" {
+                        if let Some(token) = &cancel_token {
+                            if cancellation_requested(py, token)? {
+                                return Err(PyInterruptedError::new_err(
+                                    "FFT2 operation cancelled",
+                                ));
+                            }
+                        }
+                    }
+                    if let Some(callback) = &progress_cb {
+                        callback.call1(py, (pass, completed, total))?;
+                    }
+                    Ok(())
+                })
+                .map_err(|error| anyhow!("FFT2 Python callback failed: {error}"))
+            },
+        )
+    });
+    result.map_err(|error| {
+        let message = error.to_string();
+        if message.contains("operation cancelled") {
+            PyInterruptedError::new_err(message)
+        } else {
+            PyValueError::new_err(message)
+        }
+    })
+}
+
+#[pyfunction(signature = (infile, outfile, scratchfile, nx, ny, progress_cb=None, cancel_token=None, memory_budget_bytes=None))]
+fn fft2_c16(
+    py: Python<'_>,
+    infile: PathBuf,
+    outfile: PathBuf,
+    scratchfile: PathBuf,
+    nx: usize,
+    ny: usize,
+    progress_cb: Option<PyObject>,
+    cancel_token: Option<PyObject>,
+    memory_budget_bytes: Option<usize>,
+) -> PyResult<()> {
+    run_fft2::<f64>(
+        py,
+        infile,
+        outfile,
+        scratchfile,
+        nx,
+        ny,
+        progress_cb,
+        cancel_token,
+        memory_budget_bytes,
+        FftDirection::Forward,
+    )
+}
+
+#[pyfunction(signature = (infile, outfile, scratchfile, nx, ny, progress_cb=None, cancel_token=None, memory_budget_bytes=None))]
+fn ifft2_c16(
+    py: Python<'_>,
+    infile: PathBuf,
+    outfile: PathBuf,
+    scratchfile: PathBuf,
+    nx: usize,
+    ny: usize,
+    progress_cb: Option<PyObject>,
+    cancel_token: Option<PyObject>,
+    memory_budget_bytes: Option<usize>,
+) -> PyResult<()> {
+    run_fft2::<f64>(
+        py,
+        infile,
+        outfile,
+        scratchfile,
+        nx,
+        ny,
+        progress_cb,
+        cancel_token,
+        memory_budget_bytes,
+        FftDirection::Inverse,
+    )
+}
+
+#[pyfunction(signature = (infile, outfile, scratchfile, nx, ny, progress_cb=None, cancel_token=None, memory_budget_bytes=None))]
+fn fft2_c8(
+    py: Python<'_>,
+    infile: PathBuf,
+    outfile: PathBuf,
+    scratchfile: PathBuf,
+    nx: usize,
+    ny: usize,
+    progress_cb: Option<PyObject>,
+    cancel_token: Option<PyObject>,
+    memory_budget_bytes: Option<usize>,
+) -> PyResult<()> {
+    run_fft2::<f32>(
+        py,
+        infile,
+        outfile,
+        scratchfile,
+        nx,
+        ny,
+        progress_cb,
+        cancel_token,
+        memory_budget_bytes,
+        FftDirection::Forward,
+    )
+}
+
+#[pyfunction(signature = (infile, outfile, scratchfile, nx, ny, progress_cb=None, cancel_token=None, memory_budget_bytes=None))]
+fn ifft2_c8(
+    py: Python<'_>,
+    infile: PathBuf,
+    outfile: PathBuf,
+    scratchfile: PathBuf,
+    nx: usize,
+    ny: usize,
+    progress_cb: Option<PyObject>,
+    cancel_token: Option<PyObject>,
+    memory_budget_bytes: Option<usize>,
+) -> PyResult<()> {
+    run_fft2::<f32>(
+        py,
+        infile,
+        outfile,
+        scratchfile,
+        nx,
+        ny,
+        progress_cb,
+        cancel_token,
+        memory_budget_bytes,
+        FftDirection::Inverse,
+    )
 }
 
 /// Create a npy file that only consists of a header, without any data. Note that this file is
@@ -344,6 +522,10 @@ fn bfpy(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fft_c8, m)?)?;
     m.add_function(wrap_pyfunction!(ifft_c8, m)?)?;
     m.add_function(wrap_pyfunction!(generate_header_c8, m)?)?;
+    m.add_function(wrap_pyfunction!(fft2_c16, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft2_c16, m)?)?;
+    m.add_function(wrap_pyfunction!(fft2_c8, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft2_c8, m)?)?;
     m.add_class::<ChunkedEditor>()?;
     Ok(())
 }

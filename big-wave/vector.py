@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from scipy import fft as spfft  # type: ignore # https://github.com/scipy/scipy/issues/17158
 import shutil
-from typing import Callable, Protocol, Self
+from typing import Any, Callable, Protocol, Self
 import numpy as np
 
 import bfpy
@@ -110,8 +110,22 @@ class DiskVector(Vector):
     scratchfile: Path
     len: int
     typ: np.dtype
+    fft2_backend: str
+    fft2_memory_budget_bytes: int
+    fft2_progress_cb: Callable[[str, int, int], Any] | None
+    fft2_cancel_token: Any | None
 
-    def __init__(self, file: Path, scratchfile: Path, len: int, dtype: np.dtype):
+    def __init__(
+        self,
+        file: Path,
+        scratchfile: Path,
+        len: int,
+        dtype: np.dtype,
+        fft2_backend: str = "bfpy_ooc",
+        fft2_memory_budget_bytes: int = 256 * 1024 * 1024,
+        fft2_progress_cb: Callable[[str, int, int], Any] | None = None,
+        fft2_cancel_token: Any | None = None,
+    ):
         if not isinstance(file, Path):
             file = Path(file)
         if not isinstance(scratchfile, Path):
@@ -121,6 +135,12 @@ class DiskVector(Vector):
         self.scratchfile = scratchfile
         self.len = len
         self.typ = np.dtype(dtype)
+        self.fft2_backend = str(fft2_backend)
+        self.fft2_memory_budget_bytes = int(fft2_memory_budget_bytes)
+        if self.fft2_memory_budget_bytes <= 0:
+            raise ValueError("fft2_memory_budget_bytes must be positive")
+        self.fft2_progress_cb = fft2_progress_cb
+        self.fft2_cancel_token = fft2_cancel_token
 
     def zero(self: Self, chunk_size: int) -> None:
         """
@@ -155,24 +175,52 @@ class DiskVector(Vector):
         destination.len = self.len
 
     def fft2(self: Self, destination: Self, nx: int, ny: int):
-        """
-        2D FFT for DiskVector. Uses in-memory numpy/scipy for the computation.
-        This is correct but not out-of-core; a fully chunked implementation
-        using row-wise 1D FFTs + transpose can replace this for large vectors.
-        """
-        data = np.load(self.file)
-        mat = data.reshape(ny, nx)
-        result = spfft.fft2(mat)
-        np.save(destination.file, result.reshape(-1))
+        """Run the transactional Rust out-of-core FFT2 backend."""
+        self._validate_fft2(destination, nx, ny)
+        function = bfpy.fft2_c16 if self.typ == np.dtype(np.complex128) else bfpy.fft2_c8
+        function(
+            self.file,
+            destination.file,
+            self.scratchfile,
+            nx,
+            ny,
+            self.fft2_progress_cb,
+            self.fft2_cancel_token,
+            self.fft2_memory_budget_bytes,
+        )
         destination.len = self.len
+        destination.typ = self.typ
 
     def ifft2(self: Self, destination: Self, nx: int, ny: int):
-        """2D IFFT for DiskVector. See fft2 for implementation notes."""
-        data = np.load(self.file)
-        mat = data.reshape(ny, nx)
-        result = spfft.ifft2(mat)
-        np.save(destination.file, result.reshape(-1))
+        """Run the normalized transactional Rust out-of-core IFFT2 backend."""
+        self._validate_fft2(destination, nx, ny)
+        function = bfpy.ifft2_c16 if self.typ == np.dtype(np.complex128) else bfpy.ifft2_c8
+        function(
+            self.file,
+            destination.file,
+            self.scratchfile,
+            nx,
+            ny,
+            self.fft2_progress_cb,
+            self.fft2_cancel_token,
+            self.fft2_memory_budget_bytes,
+        )
         destination.len = self.len
+        destination.typ = self.typ
+
+    def _validate_fft2(self: Self, destination: Self, nx: int, ny: int) -> None:
+        if self.fft2_backend != "bfpy_ooc":
+            raise ValueError(
+                f"DiskVector requires fft2_backend='bfpy_ooc', got {self.fft2_backend!r}"
+            )
+        if nx <= 0 or ny <= 0 or nx * ny != self.len:
+            raise ValueError(
+                f"DiskVector FFT2 shape ({ny}, {nx}) does not match length {self.len}"
+            )
+        if not isinstance(destination, DiskVector):
+            raise TypeError("DiskVector FFT2 destination must also be a DiskVector")
+        if destination.typ != self.typ:
+            raise ValueError("DiskVector FFT2 source and destination dtypes must match")
 
     def write_chunked(
         self: Self, chunk_size: int, fn: Callable[[int, np.ndarray], None]
@@ -238,7 +286,16 @@ class DiskVector(Vector):
             counter += 1
 
         shutil.copyfile(self.file, newfile)
-        dv = DiskVector(newfile, self.scratchfile, self.len, self.typ)
+        dv = DiskVector(
+            newfile,
+            self.scratchfile,
+            self.len,
+            self.typ,
+            fft2_backend=self.fft2_backend,
+            fft2_memory_budget_bytes=self.fft2_memory_budget_bytes,
+            fft2_progress_cb=self.fft2_progress_cb,
+            fft2_cancel_token=self.fft2_cancel_token,
+        )
         return dv  # type: ignore # see todo note in class Vector
 
     def copy_to(self: Self, destination: Self) -> None:

@@ -13,7 +13,7 @@ Physics:
 
   beta = beta_bound + beta_ff
     beta_bound: Chantler mu_photo/mu_total scaled by (Z-Z*)/Z
-    beta_ff:    Kramers inverse bremsstrahlung  [placeholder — to be added]
+    beta_ff:    Kramers inverse bremsstrahlung
 
 References:
   J.D. Jackson, Classical Electrodynamics, 3rd ed., §7.5
@@ -35,6 +35,7 @@ except ImportError:
 _Scatterer = None
 _xrayDB = None
 _scatterer_cache: Dict[Tuple[str, float], object] = {}
+_symbol_cache: Dict[int, str] = {13: "Al"}
 
 
 def _lazy_import_xraydb():
@@ -53,6 +54,15 @@ def _get_scatterer(symbol: str, energy: float):
     if key not in _scatterer_cache:
         _scatterer_cache[key] = _Scatterer(symbol, energy)
     return _scatterer_cache[key]
+
+
+def _get_element_symbol(Z: int) -> str:
+    """Resolve and cache an atomic symbol once per element."""
+    if Z not in _symbol_cache:
+        _lazy_import_xraydb()
+        db = _xrayDB()
+        _symbol_cache[Z] = db.atomic_symbol(Z)
+    return _symbol_cache[Z]
 
 
 def _gaunt_ff(T_e: float, energy: float) -> float:
@@ -186,14 +196,7 @@ def plasma_delta_beta(
 
     if fraction_bound > 0.0 and n_i > 0.0:
         # Map Z to element symbol for Chantler lookup
-        symbol = {13: "Al"}.get(Z, None)
-        if symbol is None:
-            _lazy_import_xraydb()
-            db = _xrayDB()
-            symbol = db.atomic_symbol(Z)
-            # Keep the session alive only long enough for the lookup.
-            # The Scatterer cache will hold its own references.
-
+        symbol = _get_element_symbol(Z)
         scat = _get_scatterer(symbol, energy)
 
         # Scale neutral-atom scattering factors by bound-electron fraction.
@@ -231,32 +234,54 @@ def plasma_delta_beta_grid(
     Z: int,
     energy: float,
 ) -> Tuple:
-    """
-    Vectorized wrapper: compute (delta_grid, beta_grid, atlen_grid) over
-    full 2D grids.  Each input grid should be a numpy array of the same shape.
+    """Vectorized plasma optics for an arbitrary tile of equally shaped grids.
 
-    Returns three numpy arrays of matching shape.
+    Chantler constants and the element symbol are scalar cached values.  All
+    density/temperature arithmetic is performed by NumPy without per-pixel
+    Python calls.
     """
     import numpy as np
 
-    shape = ne_grid.shape
-    delta_grid = np.zeros(shape, dtype=np.float64)
-    beta_grid = np.zeros(shape, dtype=np.float64)
-    atlen_grid = np.zeros(shape, dtype=np.float64)
+    ne = np.asarray(ne_grid, dtype=np.float64)
+    ni = np.asarray(ni_grid, dtype=np.float64)
+    te = np.asarray(te_grid, dtype=np.float64)
+    zstar = np.asarray(zstar_grid, dtype=np.float64)
+    if not (ne.shape == ni.shape == te.shape == zstar.shape):
+        raise ValueError("plasma grid tiles must have identical shapes")
+    if energy <= 0.0:
+        raise ValueError(f"energy must be positive, got {energy}")
 
-    it = np.nditer(ne_grid, flags=["multi_index"])
-    while not it.finished:
-        idx = it.multi_index
-        ne = float(ne_grid[idx])
-        ni = float(ni_grid[idx])
-        te = float(te_grid[idx])
-        zs = float(zstar_grid[idx])
+    lamb_cm = 1.0e-8 * PLANCK_HC / energy
+    prefactor = R_ELECTRON_CM * lamb_cm * lamb_cm / (2.0 * pi)
+    delta = ne * prefactor
+    beta = np.zeros(ne.shape, dtype=np.float64)
 
-        d, b, a = plasma_delta_beta(ne, ni, te, zs, Z, energy)
-        delta_grid[idx] = d
-        beta_grid[idx] = b
-        atlen_grid[idx] = a
+    fraction_bound = np.where(zstar < Z, (Z - zstar) / Z, 0.0)
+    bound_mask = (fraction_bound > 0.0) & (ni > 0.0)
+    if np.any(bound_mask):
+        scat = _get_scatterer(_get_element_symbol(Z), energy)
+        bound_scale = ni * prefactor * fraction_bound
+        delta = delta + np.where(bound_mask, bound_scale * scat.f1, 0.0)
+        beta += np.where(
+            bound_mask,
+            bound_scale * scat.f2 * (scat.mu_total / scat.mu_photo),
+            0.0,
+        )
 
-        it.iternext()
+    ff_mask = (ne > 0.0) & (ni > 0.0) & (zstar > 0.0) & (te > 0.0)
+    if np.any(ff_mask):
+        nu = energy / 4.135667e-15
+        alpha_ff = np.zeros(ne.shape, dtype=np.float64)
+        alpha_ff[ff_mask] = (
+            3.7e8
+            * ne[ff_mask]
+            * ni[ff_mask]
+            * np.square(zstar[ff_mask])
+            / (np.sqrt(te[ff_mask] * 11604.5) * nu ** 3)
+        )
+        beta += alpha_ff * lamb_cm / (4.0 * pi)
 
-    return delta_grid, beta_grid, atlen_grid
+    atlen = np.full(ne.shape, np.inf, dtype=np.float64)
+    positive_beta = beta > 0.0
+    atlen[positive_beta] = lamb_cm / (4.0 * pi * beta[positive_beta])
+    return delta, beta, atlen

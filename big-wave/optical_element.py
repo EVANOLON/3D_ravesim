@@ -39,7 +39,7 @@ ComplexOrNdarray = TypeVar("ComplexOrNdarray", np.complex128, np.ndarray)
 def material_factor(
     deltabeta: ComplexOrNdarray, thickness: float, wl: float
 ) -> ComplexOrNdarray:
-    return np.exp(2j * np.pi * thickness / wl * deltabeta)
+    return np.exp(-2j * np.pi * thickness / wl * np.conj(deltabeta))
 
 
 def extract_from_deltabeta_table(
@@ -415,7 +415,7 @@ class Sample(OpticalElement):
         if len(shape) == 2:
             assert shape[0] > 0 and shape[1] > 0
         elif len(shape) == 3:
-            assert shape[0] > 0 and shape[1] > 0 and shape[2] > 0
+            assert shape[0] > 0 and shape[1] >= 2 and shape[2] >= 2
         else:
             raise ValueError(f"Sample grid must be 2D or 3D, got shape {shape}")
         assert self.grid.dtype in (np.uint32, np.int32), f"grid dtype must be uint32 or int32, got {self.grid.dtype}"
@@ -508,7 +508,9 @@ class Sample(OpticalElement):
         stepping_iteration: int,
         history: Optional[History],
     ) -> None:
-        """2D sample application with bilinear interpolation"""
+        """Apply a 3D material grid using row-aligned 2D wavefront tiles."""
+        from propagation import require_row_aligned_chunk_size, _tile_view
+
         z_len, y_len, x_len = self.grid.shape
         dy_s = self.pixel_size_y if self.pixel_size_y != 0.0 else self.pixel_size_x
 
@@ -518,51 +520,64 @@ class Sample(OpticalElement):
 
         nx = sim_params.nx
         ny = sim_params.ny
+        require_row_aligned_chunk_size(sim_params.chunk_size, nx, ny)
 
-        for rowidx in range(z_len):
+        # The x mapping is identical for every y tile and z slice.  Only O(nx)
+        # coordinate/index arrays are retained.
+        x_idx = (
+            (np.arange(nx, dtype=np.float64) - nx / 2.0) * sim_params.dx
+            + x_pos
+            + x_len * self.pixel_size_x * 0.5
+        ) / self.pixel_size_x
+        x_floor_raw = np.floor(x_idx).astype(np.int64)
+        x_frac = x_idx - x_floor_raw
+        inside_x = (x_idx >= 0.0) & (x_idx < float(x_len) - 1.0)
+        x_floor = np.clip(x_floor_raw, 0, x_len - 2)
+        sim_y = (np.arange(ny, dtype=np.float64) - ny / 2.0) * sim_params.get_dy()
+
+        start_slice = int(getattr(self, "_checkpoint_start_slice", 0))
+        if start_slice < 0 or start_slice > z_len:
+            raise ValueError(f"invalid Sample checkpoint slice {start_slice}/{z_len}")
+        checkpoint_callback = getattr(self, "_checkpoint_callback", None)
+
+        for rowidx in range(start_slice, z_len):
             if history is not None:
                 z = self.z_start + rowidx * self.pixel_size_z
                 history.push(
                     square_and_downsample_2d(u, sim_params, z), z,
                 )
 
-            # Extract the 2D deltabeta grid for this z-slice: (y_len, x_len)
-            row_deltabeta: np.ndarray = self.db_list[self.grid[rowidx, :, :]]
-
             def modifier(idx: int, chunk: np.ndarray) -> None:
-                flat = idx + np.arange(len(chunk), dtype=np.int64)
-                ix = flat % nx
-                iy = flat // nx
+                tile, y_start = _tile_view(idx, chunk, nx, ny)
+                rows = tile.shape[0]
+                y_idx = (
+                    sim_y[y_start:y_start + rows]
+                    + y_pos
+                    + y_len * dy_s * 0.5
+                ) / dy_s
+                y_floor_raw = np.floor(y_idx).astype(np.int64)
+                y_frac = y_idx - y_floor_raw
+                inside_y = (y_idx >= 0.0) & (y_idx < float(y_len) - 1.0)
+                y_floor = np.clip(y_floor_raw, 0, y_len - 2)
 
-                # Physical coordinates (centered, with phase step offset)
-                x = (ix - nx / 2.0) * sim_params.dx + x_pos + x_len * self.pixel_size_x * 0.5
-                y = (iy - ny / 2.0) * sim_params.get_dy() + y_pos + y_len * dy_s * 0.5
+                # Advanced indexing reads only the required z/y tile from a
+                # memmapped integer grid.  Complex128 exists only for this tile.
+                x0 = x_floor[None, :]
+                y0 = y_floor[:, None]
+                db_00 = self.db_list[self.grid[rowidx, y0, x0]]
+                db_01 = self.db_list[self.grid[rowidx, y0, x0 + 1]]
+                db_10 = self.db_list[self.grid[rowidx, y0 + 1, x0]]
+                db_11 = self.db_list[self.grid[rowidx, y0 + 1, x0 + 1]]
 
-                # Map to sample grid coordinates
-                x_idx = x / self.pixel_size_x
-                y_idx = y / dy_s
-
-                # Bilinear interpolation with edge clamping
-                x_floor = np.floor(x_idx).astype(np.int64)
-                y_floor = np.floor(y_idx).astype(np.int64)
-                x_frac = x_idx - x_floor
-                y_frac = y_idx - y_floor
-
-                x_floor = np.clip(x_floor, 0, x_len - 2)
-                y_floor = np.clip(y_floor, 0, y_len - 2)
-
-                # Four corner values
-                db_00 = row_deltabeta[y_floor, x_floor]
-                db_01 = row_deltabeta[y_floor, x_floor + 1]
-                db_10 = row_deltabeta[y_floor + 1, x_floor]
-                db_11 = row_deltabeta[y_floor + 1, x_floor + 1]
-
-                # Bilinear interpolation
-                db_y0 = db_00 * (1.0 - x_frac) + db_01 * x_frac
-                db_y1 = db_10 * (1.0 - x_frac) + db_11 * x_frac
-                interpolated_db = db_y0 * (1.0 - y_frac) + db_y1 * y_frac
-
-                chunk *= material_factor(interpolated_db, self.pixel_size_z, sim_params.wl)
+                db_y0 = db_00 * (1.0 - x_frac[None, :]) + db_01 * x_frac[None, :]
+                db_y1 = db_10 * (1.0 - x_frac[None, :]) + db_11 * x_frac[None, :]
+                interpolated_db = (
+                    db_y0 * (1.0 - y_frac[:, None]) + db_y1 * y_frac[:, None]
+                )
+                interpolated_db[~(inside_y[:, None] & inside_x[None, :])] = 0.0
+                tile *= material_factor(
+                    interpolated_db, self.pixel_size_z, sim_params.wl
+                )
 
             u.modify_chunked(sim_params.chunk_size, modifier)
             propagate_2d(
@@ -572,6 +587,10 @@ class Sample(OpticalElement):
                 sim_params.chunk_size, cutoff_freq,
                 nx, ny,
             )
+            if checkpoint_callback is not None:
+                checkpoint_callback(
+                    rowidx + 1, self.z_start + (rowidx + 1) * self.pixel_size_z
+                )
 
 @dataclass
 class precise_Sample(OpticalElement):

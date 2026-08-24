@@ -459,7 +459,9 @@ class TestMultisim(TempDirTest):
         self.assertEqual(sim_dir, expected_sim_dir)
 
         cfg = config.load(expected_sim_dir / "config.yaml")
-        self.assertEqual(dct, cfg)
+        expected_cfg = make_config(disk_vector=False, save_final=False)
+        expected_cfg["sim_params"] = config.resolve_sim_params(expected_cfg)
+        self.assertEqual(expected_cfg, cfg)
 
         computed = config.load(expected_sim_dir / "computed.yaml")
         self.assertEqual(len(computed["cutoff_angles"]), 3)

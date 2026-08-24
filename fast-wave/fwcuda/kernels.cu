@@ -421,36 +421,53 @@ __global__ void apply_plasma_sample_factors_2d_kernel(
     const int idx = iy * nx + ix;
 
     const double x = static_cast<double>(ix - nx / 2) * dx + x_position + pixel_size_x * x_len * 0.5;
-    const double y = static_cast<double>(iy - ny / 2) * dy + y_position + pixel_size_y * y_len * 0.5;
-
     const double x_index = x / pixel_size_x;
-    const double y_index = y / pixel_size_y;
 
-    double x_clamped = x_index, y_clamped = y_index;
+    double x_clamped = x_index;
     if (x_clamped < 0.0) x_clamped = 0.0;
     if (x_clamped >= static_cast<double>(x_len) - 1.0) x_clamped = static_cast<double>(x_len) - 2.0;
-    if (y_clamped < 0.0) y_clamped = 0.0;
-    if (y_clamped >= static_cast<double>(y_len) - 1.0) y_clamped = static_cast<double>(y_len) - 2.0;
 
     const std::size_t x_floor = static_cast<std::size_t>(x_clamped);
-    const std::size_t y_floor = static_cast<std::size_t>(y_clamped);
     const double x_frac = x_clamped - static_cast<double>(x_floor);
-    const double y_frac = y_clamped - static_cast<double>(y_floor);
+
+    // y-direction: handle 1D mode (y_len == 1) separately to avoid
+    // division by zero when pixel_size_y == 0.
+    double y_frac;
+    std::size_t y_floor;
+    if (y_len > 1) {
+        const double y = static_cast<double>(iy - ny / 2) * dy + y_position + pixel_size_y * y_len * 0.5;
+        const double y_index = y / pixel_size_y;
+        double y_clamped = y_index;
+        if (y_clamped < 0.0) y_clamped = 0.0;
+        if (y_clamped >= static_cast<double>(y_len) - 1.0) y_clamped = static_cast<double>(y_len) - 2.0;
+        y_floor = static_cast<std::size_t>(y_clamped);
+        y_frac = y_clamped - static_cast<double>(y_floor);
+    } else {
+        y_floor = 0;
+        y_frac = 0.0;
+    }
 
     const std::size_t slice_offset = z_slice_index * y_len * x_len;
 
     const DevComplex<double> db_00 = d_deltabeta_grid[slice_offset + y_floor * x_len + x_floor];
     const DevComplex<double> db_01 = d_deltabeta_grid[slice_offset + y_floor * x_len + x_floor + 1];
-    const DevComplex<double> db_10 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor];
-    const DevComplex<double> db_11 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor + 1];
+    DevComplex<double> interpolated_db;
 
-    DevComplex<double> db_y0, db_y1, interpolated_db;
-    db_y0.x = db_00.x * (1.0 - x_frac) + db_01.x * x_frac;
-    db_y0.y = db_00.y * (1.0 - x_frac) + db_01.y * x_frac;
-    db_y1.x = db_10.x * (1.0 - x_frac) + db_11.x * x_frac;
-    db_y1.y = db_10.y * (1.0 - x_frac) + db_11.y * x_frac;
-    interpolated_db.x = db_y0.x * (1.0 - y_frac) + db_y1.x * y_frac;
-    interpolated_db.y = db_y0.y * (1.0 - y_frac) + db_y1.y * y_frac;
+    if (y_len > 1) {
+        const DevComplex<double> db_10 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor];
+        const DevComplex<double> db_11 = d_deltabeta_grid[slice_offset + (y_floor + 1) * x_len + x_floor + 1];
+        DevComplex<double> db_y0, db_y1;
+        db_y0.x = db_00.x * (1.0 - x_frac) + db_01.x * x_frac;
+        db_y0.y = db_00.y * (1.0 - x_frac) + db_01.y * x_frac;
+        db_y1.x = db_10.x * (1.0 - x_frac) + db_11.x * x_frac;
+        db_y1.y = db_10.y * (1.0 - x_frac) + db_11.y * x_frac;
+        interpolated_db.x = db_y0.x * (1.0 - y_frac) + db_y1.x * y_frac;
+        interpolated_db.y = db_y0.y * (1.0 - y_frac) + db_y1.y * y_frac;
+    } else {
+        // 1D mode: only x-interpolation, no y-interpolation
+        interpolated_db.x = db_00.x * (1.0 - x_frac) + db_01.x * x_frac;
+        interpolated_db.y = db_00.y * (1.0 - x_frac) + db_01.y * x_frac;
+    }
 
     const double atomfactor = 2.0 * M_PI * dz / params.wl;
     DevComplex<double> exponent;

@@ -27,6 +27,9 @@ import numpy as np
 # ── add big-wave to path ──────────────────────────────────────────────
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "big-wave"))
 
+# Import config first to avoid the repository's config/propagation circular
+# import when this file is executed directly.
+import config  # noqa: F401, E402
 from propagation import (
     SimParams, propagate, propagate_2d, propagate_analytically,
     propagate_analytically_2d, square_and_downsample,
@@ -114,18 +117,18 @@ def test_2d_free_space(plot=True):
     # ── parameters ──────────────────────────────────────────────
     nx, ny = 256, 256
     N = nx * ny                         # = 65536
-    dx = 1.0e-6                         # 1 µm
-    dy = 1.0e-6
+    dx = 1.0e-7                         # 0.1 µm; satisfies source-plane Nyquist
+    dy = 1.0e-7
     wl = convert_energy_wavelength(8000.0)  # 8 keV → ~1.55e-10 m
     z_detector = 0.02                   # 2 cm
 
-    det_pix_x = 4.0e-6
-    det_pix_y = 4.0e-6
-    det_size_x = nx * dx                # 256 µm
+    det_pix_x = 4.0e-7
+    det_pix_y = 4.0e-7
+    det_size_x = nx * dx                # 25.6 µm
     det_size_y = ny * dy
 
     chunk_size = 4096
-    cutoff_angle = 0.015                # ~0.86°, generous for small FOV
+    cutoff_angle = 2.0e-4               # below both axis Nyquist limits
     cutoff_freq = np.sin(cutoff_angle) / wl
 
     params_2d = SimParams(
@@ -155,7 +158,7 @@ def test_2d_free_space(plot=True):
 
     # ── reference: 1D propagation with same transverse extent ─
     params_1d = SimParams(
-        N=N, dx=dx, z_detector=z_detector,
+        N=nx, dx=dx, z_detector=z_detector,
         detector_size=det_size_x,
         detector_pixel_size_x=det_pix_x,
         detector_pixel_size_y=det_pix_y,
@@ -163,8 +166,8 @@ def test_2d_free_space(plot=True):
     )
     assert not params_1d.is_2d, "SimParams should be in 1D mode"
 
-    u1 = NumpyVector(np.zeros(N, dtype=np.complex64))
-    U1 = NumpyVector(np.zeros(N, dtype=np.complex64))
+    u1 = NumpyVector(np.zeros(nx, dtype=np.complex64))
+    U1 = NumpyVector(np.zeros(nx, dtype=np.complex64))
 
     source_1d = PointSource(x=0.0, z=0.0)
     source_1d.propagate_to(z_detector, params_1d, cutoff_freq, u1, U1, None)
@@ -223,18 +226,18 @@ def test_2d_sample(plot=True):
     # ── parameters ──────────────────────────────────────────────
     nx, ny = 256, 256
     N = nx * ny
-    dx = 1.0e-6
-    dy = 1.0e-6
+    dx = 5.0e-8
+    dy = 5.0e-8
     wl = convert_energy_wavelength(8000.0)
 
     z_source = 0.0
     z_sample = 0.01         # 1 cm
     z_detector = 0.03       # 3 cm
 
-    det_pix_x = 4.0e-6
-    det_pix_y = 4.0e-6
+    det_pix_x = 2.0e-7
+    det_pix_y = 2.0e-7
     chunk_size = 4096
-    cutoff_angle = 0.025
+    cutoff_angle = 5.0e-4
     cutoff_freq = np.sin(cutoff_angle) / wl
 
     params = SimParams(
@@ -359,19 +362,19 @@ def test_plasma_1d(plot=True):
 
     # ── parameters ──────────────────────────────────────────────
     N = 65536
-    dx = 1.0e-7
+    dx = 2.0e-9
     wl = convert_energy_wavelength(8000.0)
     z_source = 0.0
     z_sample = 0.005        # 5 mm
     z_detector = 0.02       # 2 cm
-    det_pix = 4.0e-6
+    det_pix = 1.0e-7
     chunk_size = 4096
     cutoff_angle = 0.02
     cutoff_freq = np.sin(cutoff_angle) / wl
 
     params = SimParams(
         N=N, dx=dx, z_detector=z_detector,
-        detector_size=10e-3,
+        detector_size=N * dx,
         detector_pixel_size_x=det_pix,
         detector_pixel_size_y=1.0,
         wl=wl, chunk_size=chunk_size,
@@ -471,9 +474,9 @@ def test_generate_2d_config():
     import shutil
 
     # Small 2D simulation config (matches fast-wave config_parsing.cpp)
-    nx, ny = 512, 512
-    dx = 2.0e-7
-    dy = 2.0e-7
+    nx, ny = 1024, 1024
+    dx = 1.0e-7
+    dy = 1.0e-7
 
     # Create a simple 2D grid file (1D sample: z × x)
     grid_2d = np.zeros((3, 64), dtype=np.uint32)
@@ -494,8 +497,8 @@ def test_generate_2d_config():
             "dx": dx,
             "dy": dy,
             "z_detector": 0.5,
-            "detector_size_x": nx * dx * 0.5,
-            "detector_size_y": ny * dy * 0.5,
+            "detector_size_x": nx * dx * 0.2,
+            "detector_size_y": ny * dy * 0.2,
             "detector_pixel_size_x": dx * 4,
             "detector_pixel_size_y": dy * 4,
             "chunk_size": 256 * 1024 * 1024 // 16,
@@ -505,7 +508,7 @@ def test_generate_2d_config():
         "dtype": "c8",
         "multisource": {
             "type": "points",
-            "energy_range": [9900, 10100],
+            "energy_range": [7900, 8100],
             "x_range": [-1e-6, 1e-6],
             "y_range": [-1e-6, 1e-6],
             "z": 0.0,
@@ -587,7 +590,7 @@ def print_summary():
 ║  wavesim.run_simulation()   ✅         run_simulation_2d()✅    ║
 ║  ─────────────────────                 ────────────────────    ║
 ║  NOT yet 2D:                                                  ║
-║    PlasmaSample.apply()     ❌          (only 1D)              ║
+║    PlasmaSample.apply()     ✅          vectorized row tiles   ║
 ║    precise_Sample.apply()   ❌          (only 1D)              ║
 ║    Grating/EnvGrating       ❌          (only 1D on both)      ║
 ╚══════════════════════════════════════════════════════════════════╝

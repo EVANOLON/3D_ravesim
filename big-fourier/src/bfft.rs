@@ -1,6 +1,5 @@
 //! Copyright (c) 2024, ETH Zurich
 
-
 use bytemuck::Pod;
 use num_complex::Complex;
 use num_traits::Float;

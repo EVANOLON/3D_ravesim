@@ -298,57 +298,11 @@ void apply_precise_sample(PreciseSample ps, DevComplex<S> *d_u, DevComplex<S> *d
 }
 //precise_sample_update_end
 
-//plasma_sample_begin
-template <typename S>
-void apply_plasma_sample_2d(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
-                             SimParams const &params, FFT<S> const &fft,
-                             double cutoff_freq_x, double cutoff_freq_y,
-                             std::size_t phase_step) {
-    const double dz = ps.pixel_size_z;
-
-    DevComplex<double> *d_deltabeta;
-    const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
-    check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
-    cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
-
-    for (std::size_t i = 0; i < ps.z_len; ++i) {
-        apply_plasma_sample_factors_2d<S>(d_u, params, dz, d_deltabeta,
-                                          ps.pixel_size_x, ps.pixel_size_y,
-                                          ps.x_len, ps.y_len, i,
-                                          ps.x_positions[phase_step],
-                                          ps.y_positions[phase_step]);
-        propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
-    }
-
-    cudaFree(d_deltabeta);
-}
-
+// Forward declarations for PlasmaSample functions (defined after propagate_2d)
 template <typename S>
 void apply_plasma_sample(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
                           SimParams const &params, FFT<S> const &fft, double cutoff_freq,
-                          std::size_t phase_step) {
-    if (params.is2d) {
-        apply_plasma_sample_2d<S>(ps, d_u, d_U, params, fft, cutoff_freq, cutoff_freq, phase_step);
-    } else {
-        const double dz = ps.pixel_size_z;
-        DevComplex<double> *d_deltabeta;
-        const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
-        check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
-        cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
-
-        for (std::size_t i = 0; i < ps.z_len; ++i) {
-            SimParams params_1d = params;
-            params_1d.ny = 1;
-            apply_plasma_sample_factors_2d<S>(d_u, params_1d, dz, d_deltabeta,
-                                              ps.pixel_size_x, 0.0,
-                                              ps.x_len, 1, i,
-                                              ps.x_positions[phase_step], 0.0);
-            propagate<S>(params, fft, dz, cutoff_freq, d_u, d_U);
-        }
-        cudaFree(d_deltabeta);
-    }
-}
-//plasma_sample_end
+                          std::size_t phase_step);
 
 template <typename S>
 void apply_optical_element(OpticalElement *el, DevComplex<S> *d_u, DevComplex<S> *d_U,
@@ -582,6 +536,58 @@ void propagate_with_history_2d(SimParams const &params, FFT<S> const &fft, doubl
         propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
     }
 }
+
+//plasma_sample_begin
+template <typename S>
+void apply_plasma_sample_2d(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
+                             SimParams const &params, FFT<S> const &fft,
+                             double cutoff_freq_x, double cutoff_freq_y,
+                             std::size_t phase_step) {
+    const double dz = ps.pixel_size_z;
+
+    DevComplex<double> *d_deltabeta;
+    const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
+    check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
+    cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
+
+    for (std::size_t i = 0; i < ps.z_len; ++i) {
+        apply_plasma_sample_factors_2d<S>(d_u, params, dz, d_deltabeta,
+                                          ps.pixel_size_x, ps.pixel_size_y,
+                                          ps.x_len, ps.y_len, i,
+                                          ps.x_positions[phase_step],
+                                          ps.y_positions[phase_step]);
+        propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+    }
+
+    cudaFree(d_deltabeta);
+}
+
+template <typename S>
+void apply_plasma_sample(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U,
+                          SimParams const &params, FFT<S> const &fft, double cutoff_freq,
+                          std::size_t phase_step) {
+    if (params.is2d) {
+        apply_plasma_sample_2d<S>(ps, d_u, d_U, params, fft, cutoff_freq, cutoff_freq, phase_step);
+    } else {
+        const double dz = ps.pixel_size_z;
+        DevComplex<double> *d_deltabeta;
+        const std::size_t db_size_bytes = ps.deltabeta_grid.size() * sizeof(DevComplex<double>);
+        check_cuda_result("malloc d_deltabeta", cudaMalloc((void **)&d_deltabeta, db_size_bytes));
+        cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
+
+        for (std::size_t i = 0; i < ps.z_len; ++i) {
+            SimParams params_1d = params;
+            params_1d.ny = 1;
+            apply_plasma_sample_factors_2d<S>(d_u, params_1d, dz, d_deltabeta,
+                                              ps.pixel_size_x, 0.0,
+                                              ps.x_len, 1, i,
+                                              ps.x_positions[phase_step], 0.0);
+            propagate<S>(params, fft, dz, cutoff_freq, d_u, d_U);
+        }
+        cudaFree(d_deltabeta);
+    }
+}
+//plasma_sample_end
 
 template <typename S>
 void apply_sample_2d(Sample s, DevComplex<S> *d_u, DevComplex<S> *d_U, SimParams const &params,

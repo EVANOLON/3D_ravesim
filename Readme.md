@@ -13,7 +13,8 @@ RAVE-SIM is an X-ray wave propagation simulation framework developed at ETH Zuri
   - **big-wave** (Python + Rust) — Out-of-core computation using disk-backed wave fields, supporting arbitrarily large 1D simulations
   - **fast-wave** (C++ / CUDA) — GPU-accelerated simulation supporting both 1D and 2D wave fields
 - **1D simulation** — Mature and fully tested for line-grating interferometers (Talbot-Lau, Talbot)
-- **2D simulation** — In development, supports 3D samples and 2D area detectors
+- **2D simulation** — Supports 3D samples and 2D area detectors (verified in fast-wave)
+- **Plasma samples** — Laser-produced plasma optical elements with free-electron dispersion, bound-electron (Chantler) contributions, and Kramers inverse-bremsstrahlung absorption
 - **Out-of-core FFT** — Rust-based four-step FFT algorithm for memory-efficient large transforms
 - **Config-driven** — YAML-based configuration shared across engines
 - **Multi-source simulation** — Parallel simulation of multiple source points with spectral sampling
@@ -28,6 +29,8 @@ RAVE-SIM is an X-ray wave propagation simulation framework developed at ETH Zuri
 │   ├── wavesim.py        #   Core simulation logic
 │   ├── propagation.py    #   Wave propagation (Fresnel diffraction)
 │   ├── optical_element.py #   Gratings, samples, etc.
+│   ├── plasma_sample.py  #   Laser-produced plasma optical element
+│   ├── plasma.py         #   Plasma δ/β physics (free + bound + Kramers)
 │   ├── multisim.py       #   Multi-source simulation orchestration
 │   ├── vector.py         #   NumpyVector / DiskVector abstraction
 │   └── config.py         #   YAML configuration parser
@@ -52,16 +55,19 @@ Wave propagation in free space is modeled by **Fresnel diffraction (paraxial app
 
 ```
 u(x, z+dz) = IFFT[ FFT[u(x,z)] × H(f) ]
-H(f) = exp(-2π·i·dz/λ) × exp(π·i·λ·dz·f²)
+H(f) = exp(+2π·i·dz/λ) × exp(-π·i·λ·dz·f²)
 ```
 
 When passing through matter, the wave interacts with the material as:
 
 ```
-u_out = u_in × exp(2π·i·t/λ · (δ + iβ))
+u_out = u_in × exp(-2π·i·t/λ · (δ + iβ)⁺)
+     = u_in × exp(-2π·i·δ·t/λ) × exp(-2π·β·t/λ)
 ```
 
-where δ is the refractive index decrement (phase shift) and β is the absorption index, obtained from the NIST database.
+where δ is the refractive index decrement (phase shift) and β is the absorption index, obtained from the NIST database. The `⁺` denotes complex conjugation of the δ + iβ value.
+
+The spatial phase convention is `exp(+i·k·z)` (positive spatial phase), consistent across both big-wave and fast-wave engines. The point-source spherical wave is initialized as `u(x) = exp(+2π·i·r/λ) / r` in 2D (or `/√r` in 1D), where `r = √(x² + z²)`.
 
 ## Quick Start
 

@@ -37,7 +37,7 @@ ComplexOrNdarray = TypeVar("ComplexOrNdarray", np.complex128, np.ndarray)
 def material_factor(
     deltabeta: ComplexOrNdarray, thickness: float, wl: float
 ) -> ComplexOrNdarray:
-    return np.exp(2j * np.pi * thickness / wl * deltabeta)
+    return np.exp(-2j * np.pi * thickness / wl * np.conj(deltabeta))
 
 
 def extract_from_deltabeta_table(

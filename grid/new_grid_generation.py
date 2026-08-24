@@ -47,6 +47,14 @@ def square1(lenx: float, lenz: float, scale_x: float, scale_z: float, id: int) -
     arr = np.full((len_z, len_x), id, dtype=np.uint32)
     return arr
 
+def square3d(lenx: float, leny: float, lenz: float, scale_x: float, scale_y: float, scale_z: float, id: int) -> np.ndarray:
+    """Generate a 3D rectangle filled with material id (using round)."""
+    len_x = int(np.round(lenx / scale_x))
+    len_y = int(np.round(leny / scale_y))
+    len_z = int(np.round(lenz / scale_z))
+    arr = np.full((len_z, len_y, len_x), id, dtype=np.uint32)
+    return arr
+
 
 def double_square(lenx1: float, lenx2: float, lenz: float, scale_x: float, scale_z: float) -> np.ndarray:
     """Horizontally concatenate two rectangles."""
