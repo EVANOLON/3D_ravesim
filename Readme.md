@@ -4,8 +4,20 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/EVANOLON/3D_ravesim)
 ![License](https://img.shields.io/github/license/EVANOLON/3D_ravesim)
 
-RAVE-SIM is an X-ray wave propagation simulation framework originally developed at ETH Zurich, published in **Optics Express** ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings, samples) and free-space propagation to a detector.
-3D calculation mode was added to it. The fast-wave 3D mode has been verified.
+RAVE-SIM is an X-ray wave propagation simulation framework originally developed at ETH Zurich and described in **Optics Express** ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings and samples) and free-space propagation to a detector. This repository extends the original framework with CUDA-accelerated 2D wave-field propagation, 3D voxelized samples, 2D area detectors, and plasma-sample modeling.
+
+## Extensions in This Repository
+
+The following capabilities were added and integrated by **[Sijie Fan (EVANOLON)](https://github.com/EVANOLON)**:
+
+- Extended `fast-wave` from one-dimensional wave-field simulation to two-dimensional transverse wave fields using CUDA-accelerated 2D FFT propagation
+- Added support for three-dimensional voxelized samples and two-dimensional area detectors
+- Added grid-generation and simulation workflows for three-dimensional spherical shells, non-spherical shells, and capsule targets
+- Implemented laser-produced-plasma optical elements (`PlasmaSample`), including free-electron dispersion, bound-electron contributions, and inverse-bremsstrahlung absorption
+- Added Python and C++/CUDA support for two-dimensional `PlasmaSample` simulations
+- Added validation tests and example notebooks for 2D propagation, 3D samples, plasma samples, and detector outputs
+
+In this documentation, **3D simulation** refers to propagating a two-dimensional transverse wave field through a three-dimensional sample volume. It does not imply a full three-dimensional electromagnetic-field solver.
 
 ## Features
 
@@ -117,7 +129,8 @@ Copyright (c) 2024, ETH Zurich. All rights reserved.
 
 See the [LICENSE](LICENSE) file for details.
 
-## Related Publications
+## Original Project and Related Publications
 
 - Framework paper: [Optics Express, DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)
-- Contains code for Pascal Sommer's master thesis as well as Alexandre Vieira Pereira's and Simon Spindler's PhD theses at ETH Zurich.
+- The original framework contains code developed for Pascal Sommer's master's thesis and Alexandre Vieira Pereira's and Simon Spindler's PhD theses at ETH Zurich.
+- The extensions listed above are specific to this repository and are not claimed as part of the original publication.
