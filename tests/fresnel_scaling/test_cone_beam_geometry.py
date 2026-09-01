@@ -47,6 +47,24 @@ class ConeBeamGeometryTests(unittest.TestCase):
         self.assertEqual(params.effective_slice_dz(1.0, 0.5), 0.5)
         self.assertAlmostEqual(params.effective_final_dz(1.25), 2.0 / 3.0)
 
+    def test_cb_bpm_distance_partition_sums_to_thin_z_eff(self):
+        params = make_params(use_cone_beam_bpm=True)
+        params.configure_fresnel_detector(z_source=0.0, z_sample=1.0)
+
+        transformed_distance = (
+            params.effective_slice_dz(1.0, 0.2)
+            + params.effective_slice_dz(1.2, 0.5)
+            + params.effective_final_dz(1.7)
+        )
+        self.assertAlmostEqual(
+            transformed_distance, params.fresnel_effective_z, places=15
+        )
+        self.assertAlmostEqual(
+            params.fresnel_transverse_scale(params.z_detector),
+            params.fresnel_magnification,
+            places=15,
+        )
+
     def test_config_cb_bpm_boolean_is_strict_and_implies_fresnel(self):
         base = dict(
             N=16,
