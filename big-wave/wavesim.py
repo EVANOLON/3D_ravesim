@@ -159,13 +159,16 @@ def run_simulation(
     for el_idx, el in enumerate(elements):
         if current_z < el.z_start:
             logger.info(f"Propagating from z {current_z}m to {el.z_start}m")
+            gap_dz = params.effective_slice_dz(
+                current_z, el.z_start - current_z
+            )
             if params.is_2d:
                 propagate_with_history_2d(
-                    u, U, params, el.z_start - current_z, cutoff_freq, current_z, False, history,
+                    u, U, params, gap_dz, cutoff_freq, current_z, False, history,
                 )
             else:
                 propagate_with_history(
-                    u, U, params, el.z_start - current_z, cutoff_freq, current_z, False, history,
+                    u, U, params, gap_dz, cutoff_freq, current_z, False, history,
                 )
 
         current_z = el.z_start
@@ -205,12 +208,7 @@ def run_simulation(
         # skip the FFT calculation only if the previous step wasn't a source
         # propagation step.
         skip_fft = len(elements) > 0
-        physical_final_dz = params.z_detector - current_z
-        propagation_dz = (
-            params.fresnel_effective_z
-            if params.use_fresnel_scaling
-            else physical_final_dz
-        )
+        propagation_dz = params.effective_final_dz(current_z)
         if params.is_2d:
             propagate_with_history_2d(
                 u, U, params,
@@ -258,11 +256,14 @@ def run_simulation(
             for el_idx, el in enumerate(elements[el_start_idx:], start=el_start_idx):
                 if current_z < el.z_start:
                     logger.info(f"Propagating from z {current_z}m to {el.z_start}m")
+                    gap_dz = params.effective_slice_dz(
+                        current_z, el.z_start - current_z
+                    )
                     if params.is_2d:
                         propagate_2d(
                             u, U,
                             params.dx, params.get_dy(),
-                            params.wl, el.z_start - current_z,
+                            params.wl, gap_dz,
                             params.chunk_size, cutoff_freq,
                             params.nx, params.ny,
                         )
@@ -270,7 +271,7 @@ def run_simulation(
                         propagate(
                             u, U,
                             params.dx, params.wl,
-                            el.z_start - current_z, params.chunk_size, cutoff_freq,
+                            gap_dz, params.chunk_size, cutoff_freq,
                         )
 
                 current_z = el.z_start
@@ -288,11 +289,7 @@ def run_simulation(
 
             if current_z < params.z_detector - z_tolerance:
                 logger.info(f"Propagating from z {current_z}m to {params.z_detector}m")
-                propagation_dz = (
-                    params.fresnel_effective_z
-                    if params.use_fresnel_scaling
-                    else params.z_detector - current_z
-                )
+                propagation_dz = params.effective_final_dz(current_z)
 
                 if params.is_2d:
                     propagate_2d(

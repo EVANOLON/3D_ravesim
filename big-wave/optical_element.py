@@ -520,10 +520,13 @@ class Sample(OpticalElement):
         ny = sim_params.ny
 
         for rowidx in range(z_len):
+            slice_z = self.z_start + rowidx * self.pixel_size_z
+            coordinate_scale = sim_params.fresnel_transverse_scale(
+                slice_z + 0.5 * self.pixel_size_z
+            )
             if history is not None:
-                z = self.z_start + rowidx * self.pixel_size_z
                 history.push(
-                    square_and_downsample_2d(u, sim_params, z), z,
+                    square_and_downsample_2d(u, sim_params, slice_z), slice_z,
                 )
 
             # Extract the 2D deltabeta grid for this z-slice: (y_len, x_len)
@@ -535,8 +538,10 @@ class Sample(OpticalElement):
                 iy = flat // nx
 
                 # Physical coordinates (centered, with phase step offset)
-                x = (ix - nx / 2.0) * sim_params.dx + x_pos + x_len * self.pixel_size_x * 0.5
-                y = (iy - ny / 2.0) * sim_params.get_dy() + y_pos + y_len * dy_s * 0.5
+                x = ((ix - nx / 2.0) * sim_params.dx * coordinate_scale
+                     + x_pos + x_len * self.pixel_size_x * 0.5)
+                y = ((iy - ny / 2.0) * sim_params.get_dy() * coordinate_scale
+                     + y_pos + y_len * dy_s * 0.5)
 
                 # Map to sample grid coordinates
                 x_idx = x / self.pixel_size_x
@@ -580,7 +585,8 @@ class Sample(OpticalElement):
             propagate_2d(
                 u, U,
                 sim_params.dx, sim_params.get_dy(),
-                sim_params.wl, self.pixel_size_z,
+                sim_params.wl,
+                sim_params.effective_slice_dz(slice_z, self.pixel_size_z),
                 sim_params.chunk_size, cutoff_freq,
                 nx, ny,
             )

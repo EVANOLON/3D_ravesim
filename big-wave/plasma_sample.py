@@ -124,10 +124,13 @@ class PlasmaSample:
         sim_ny = sim_params.ny
 
         for rowidx in range(nz):
+            slice_z = self.z_start + rowidx * self.pixel_size_z
+            coordinate_scale = sim_params.fresnel_transverse_scale(
+                slice_z + 0.5 * self.pixel_size_z
+            )
             if history is not None:
-                z = self.z_start + rowidx * self.pixel_size_z
                 history.push(
-                    square_and_downsample_2d(u, sim_params, z), z,
+                    square_and_downsample_2d(u, sim_params, slice_z), slice_z,
                 )
 
             # Build the 2D deltabeta grid for this z-slice: (ny, nx)
@@ -163,8 +166,10 @@ class PlasmaSample:
                 iy = flat // sim_nx
 
                 # Physical coordinates (centred, with phase step offset)
-                x = (ix - sim_nx / 2.0) * sim_params.dx + x_pos + nx * self.pixel_size_x * 0.5
-                y = (iy - sim_ny / 2.0) * sim_params.get_dy() + y_pos + ny * dy_s * 0.5
+                x = ((ix - sim_nx / 2.0) * sim_params.dx * coordinate_scale
+                     + x_pos + nx * self.pixel_size_x * 0.5)
+                y = ((iy - sim_ny / 2.0) * sim_params.get_dy() * coordinate_scale
+                     + y_pos + ny * dy_s * 0.5)
 
                 # Map to sample grid coordinates
                 x_idx = x / self.pixel_size_x
@@ -200,7 +205,8 @@ class PlasmaSample:
             propagate_2d(
                 u, U,
                 sim_params.dx, sim_params.get_dy(),
-                sim_params.wl, self.pixel_size_z,
+                sim_params.wl,
+                sim_params.effective_slice_dz(slice_z, self.pixel_size_z),
                 sim_params.chunk_size, cutoff_freq,
                 sim_nx, sim_ny,
             )

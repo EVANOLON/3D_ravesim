@@ -45,6 +45,11 @@ class EmptyElement:
         u.fft2(U, params.nx, params.ny)
 
 
+class ThickEmptyElement(EmptyElement):
+    def get_thickness(self):
+        return 0.5
+
+
 class TestBigWaveFresnelPropagation(unittest.TestCase):
     def test_final_leg_uses_effective_distance(self):
         params = SimParams(
@@ -98,6 +103,56 @@ class TestBigWaveFresnelPropagation(unittest.TestCase):
             propagated_distances[0], params.fresnel_effective_z, places=15
         )
         self.assertNotAlmostEqual(propagated_distances[0], 4.0, places=6)
+
+    def test_cb_bpm_final_leg_starts_at_sample_exit_scale(self):
+        params = SimParams(
+            N=8 * 8,
+            nx=8,
+            ny=8,
+            dx=1.0e-6,
+            dy=1.0e-6,
+            z_detector=5.0,
+            detector_size=8.0e-6,
+            detector_size_x=8.0e-6,
+            detector_size_y=8.0e-6,
+            detector_pixel_size_x=1.0e-6,
+            detector_pixel_size_y=1.0e-6,
+            wl=1.0e-10,
+            chunk_size=8 * 4,
+            use_cone_beam_bpm=True,
+        )
+        params.configure_fresnel_detector(z_source=0.0, z_sample=1.0)
+        u = NumpyVector(np.zeros(params.N, dtype=np.complex128))
+        U = NumpyVector(np.zeros(params.N, dtype=np.complex128))
+        propagated_distances = []
+
+        def capture_propagation(
+            u, U, sim_params, dz, cutoff_freq, current_z,
+            skip_fft=False, history=None,
+        ):
+            propagated_distances.append(dz)
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            wavesim, "propagate_with_history_2d", side_effect=capture_propagation
+        ), mock.patch.object(
+            wavesim, "square_and_downsample_2d", return_value=np.zeros((1, 1))
+        ):
+            root = Path(directory)
+            wavesim.run_simulation(
+                params=params,
+                source=PlaneSource(),
+                elements=[ThickEmptyElement()],
+                cutoff_angles=[0.01, 0.01],
+                u=u,
+                U=U,
+                deltabeta_table=[],
+                sub_dir=root,
+                vectors_dir=root,
+                save_final_u_vectors=False,
+            )
+
+        self.assertEqual(len(propagated_distances), 1)
+        self.assertAlmostEqual(propagated_distances[0], 3.5 / (1.5 * 5.0))
 
 
 if __name__ == "__main__":
