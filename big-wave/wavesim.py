@@ -205,17 +205,23 @@ def run_simulation(
         # skip the FFT calculation only if the previous step wasn't a source
         # propagation step.
         skip_fft = len(elements) > 0
+        physical_final_dz = params.z_detector - current_z
+        propagation_dz = (
+            params.fresnel_effective_z
+            if params.use_fresnel_scaling
+            else physical_final_dz
+        )
         if params.is_2d:
             propagate_with_history_2d(
                 u, U, params,
-                params.z_detector - current_z, cutoff_freq, current_z,
-                skip_fft=skip_fft, history=history,
+                propagation_dz, cutoff_freq, current_z,
+                skip_fft=skip_fft, history=None if params.use_fresnel_scaling else history,
             )
         else:
             propagate_with_history(
                 u, U, params,
-                params.z_detector - current_z, cutoff_freq, current_z,
-                skip_fft=skip_fft, history=history,
+                propagation_dz, cutoff_freq, current_z,
+                skip_fft=skip_fft, history=None if params.use_fresnel_scaling else history,
             )
 
     ######## Result ########
@@ -282,11 +288,17 @@ def run_simulation(
 
             if current_z < params.z_detector - z_tolerance:
                 logger.info(f"Propagating from z {current_z}m to {params.z_detector}m")
+                propagation_dz = (
+                    params.fresnel_effective_z
+                    if params.use_fresnel_scaling
+                    else params.z_detector - current_z
+                )
+
                 if params.is_2d:
                     propagate_2d(
                         u, U,
                         params.dx, params.get_dy(),
-                        params.wl, params.z_detector - current_z,
+                        params.wl, propagation_dz,
                         params.chunk_size, cutoff_freq,
                         params.nx, params.ny,
                     )
@@ -294,7 +306,7 @@ def run_simulation(
                     propagate(
                         u, U,
                         params.dx, params.wl,
-                        params.z_detector - current_z, params.chunk_size, cutoff_freq,
+                        propagation_dz, params.chunk_size, cutoff_freq,
                     )
 
             if params.is_2d:
