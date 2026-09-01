@@ -59,6 +59,41 @@ class PointSource(Source):
         dz = z_out - self.z
 
         if sim_params.is_2d:
+            if sim_params.use_fresnel_scaling:
+                if sim_params.fresnel_effective_z <= 0 or sim_params.fresnel_magnification <= 0:
+                    raise ValueError("Fresnel detector geometry has not been configured")
+                if dz <= 0:
+                    raise ValueError("Fresnel source-to-sample distance must be positive")
+                if history is not None:
+                    raise ValueError(
+                        "physical-z source history is not supported with Fresnel scaling"
+                    )
+
+                # Fresnel scaling removes the incident spherical quadratic
+                # phase.  A centred point source becomes a constant field;
+                # an off-axis source leaves the linear phase ramp below.
+                # The 1/dz amplitude matches the central amplitude of the
+                # original 3D spherical-wave initializer.
+                wave_number = 2.0 * np.pi / sim_params.wl
+
+                def initialize_fresnel_plane(idx: int, chunk: np.ndarray) -> None:
+                    flat = idx + np.arange(len(chunk), dtype=np.int64)
+                    ix = flat % sim_params.nx
+                    iy = flat // sim_params.nx
+                    x = (ix - sim_params.nx / 2.0) * sim_params.dx
+                    y = (iy - sim_params.ny / 2.0) * sim_params.get_dy()
+                    phase = -wave_number * (x * self.x + y * self.y) / dz
+                    chunk[:] = np.exp(1j * phase) / dz
+
+                u.write_chunked(sim_params.chunk_size, initialize_fresnel_plane)
+                u.fft2(U, sim_params.nx, sim_params.ny)
+                apply_frequency_cutoff_2d(
+                    U, cutoff_freq, sim_params.dx, sim_params.get_dy(),
+                    sim_params.nx, sim_params.ny, sim_params.chunk_size,
+                )
+                U.ifft2(u, sim_params.nx, sim_params.ny)
+                return
+
             grid_density_check_2d(
                 dz, self.x, sim_params.nx, sim_params.dx,
                 self.y, sim_params.ny, sim_params.get_dy(), sim_params.wl,
