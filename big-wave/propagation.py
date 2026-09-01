@@ -1,7 +1,7 @@
   # Copyright (c) 2024, ETH Zurich
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Tuple
 import numpy as np
@@ -30,6 +30,9 @@ class SimParams:
     dy: float = 0.0
     detector_size_x: float = 0.0
     detector_size_y: float = 0.0
+    use_fresnel_scaling: bool = False
+    fresnel_magnification: float = field(default=1.0, init=False)
+    fresnel_effective_z: float = field(default=0.0, init=False)
 
     def __post_init__(self):
         if self.is_2d:
@@ -59,6 +62,52 @@ class SimParams:
 
     def get_detector_size_y(self) -> float:
         return self.detector_size_y if self.detector_size_y != 0.0 else self.get_dy() * self.ny
+
+    def configure_fresnel_detector(self, z_source: float, z_sample: float) -> None:
+        """Configure the plane-wave geometry equivalent to a point-source cone beam."""
+        if not self.use_fresnel_scaling:
+            self.fresnel_magnification = 1.0
+            self.fresnel_effective_z = 0.0
+            return
+        z_source_to_sample = z_sample - z_source
+        z_sample_to_detector = self.z_detector - z_sample
+        if z_source_to_sample <= 0 or z_sample_to_detector <= 0:
+            raise ValueError(
+                "Fresnel scaling requires z_source < z_sample < z_detector"
+            )
+        self.fresnel_effective_z = (
+            z_source_to_sample * z_sample_to_detector
+            / (z_source_to_sample + z_sample_to_detector)
+        )
+        self.fresnel_magnification = (
+            z_source_to_sample + z_sample_to_detector
+        ) / z_source_to_sample
+
+    def effective_detector_geometry(
+        self, current_z: float
+    ) -> tuple[float, float, float, float]:
+        """Return effective pixel x/y, propagation z and magnification."""
+        at_final_detector = math.isclose(
+            current_z,
+            self.z_detector,
+            rel_tol=1e-12,
+            abs_tol=max(1e-15, abs(self.z_detector) * 1e-12),
+        )
+        if self.use_fresnel_scaling and at_final_detector:
+            if self.fresnel_effective_z <= 0 or self.fresnel_magnification <= 0:
+                raise ValueError("Fresnel detector geometry has not been configured")
+            return (
+                self.detector_pixel_size_x / self.fresnel_magnification,
+                self.detector_pixel_size_y / self.fresnel_magnification,
+                self.fresnel_effective_z,
+                self.fresnel_magnification,
+            )
+        return (
+            self.detector_pixel_size_x,
+            self.detector_pixel_size_y,
+            current_z,
+            1.0,
+        )
 
 
 h = 6.62607004 * 10 ** (-34)  # planck constant in mˆ2 kg / s
@@ -533,13 +582,15 @@ def square_and_downsample_2d(
     ny = sim_params.ny
     dx = sim_params.dx
     dy = sim_params.get_dy()
-    ds_px = sim_params.detector_pixel_size_x
-    ds_py = sim_params.detector_pixel_size_y
+    physical_ds_px = sim_params.detector_pixel_size_x
+    physical_ds_py = sim_params.detector_pixel_size_y
+    ds_px, ds_py, detector_z, _ = sim_params.effective_detector_geometry(current_z)
 
-    outsize_x = int(sim_params.get_detector_size_x() // ds_px)
-    outsize_y = int(sim_params.get_detector_size_y() // ds_py)
-    assert outsize_x <= nx
-    assert outsize_y <= ny
+    # Keep the physical detector shape while mapping each integration window
+    # back into the equivalent plane-wave coordinates.
+    outsize_x = int(sim_params.get_detector_size_x() // physical_ds_px)
+    outsize_y = int(sim_params.get_detector_size_y() // physical_ds_py)
+    assert outsize_x > 0 and outsize_y > 0
 
     def index_ranges(out_n: int, grid_n: int, ds: float, d: float):
         """Per-pixel covered grid-index range, replicating the CUDA kernel."""
@@ -575,5 +626,5 @@ def square_and_downsample_2d(
     x_det = (np.arange(outsize_x) - outsize_x // 2) * ds_px
     y_det = (np.arange(outsize_y) - outsize_y // 2) * ds_py
     X, Y = np.meshgrid(x_det, y_det)
-    r = np.sqrt(X**2 + Y**2 + current_z**2)
-    return out * (current_z / r) * dx * dy
+    r = np.sqrt(X**2 + Y**2 + detector_z**2)
+    return out * (detector_z / r) * dx * dy

@@ -43,6 +43,18 @@ def get_int(dct: DictType | list, path: list) -> int:
     return int(val)
 
 
+def get_bool_value(value: Any, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    raise ValueError(f"{name} must be a boolean, got {value!r}")
+
+
 def parse_sim_params(dct: DictType) -> propagation.SimParams:
     return propagation.SimParams(
         N=get_int(dct, ["N"]),
@@ -58,6 +70,9 @@ def parse_sim_params(dct: DictType) -> propagation.SimParams:
         dy=float(dct.get("dy", 0.0)),
         detector_size_x=float(dct.get("detector_size_x", 0.0)),
         detector_size_y=float(dct.get("detector_size_y", 0.0)),
+        use_fresnel_scaling=get_bool_value(
+            dct.get("use_fresnel_scaling", False), "use_fresnel_scaling"
+        ),
     )
 
 
