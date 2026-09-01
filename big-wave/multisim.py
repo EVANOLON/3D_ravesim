@@ -563,6 +563,42 @@ def check_simulation_inputs(
         assert 0 <= a <= np.pi / 2, "cutoff angles must be between 0 and pi/2"
 
 
+def compute_fresnel_cutoff_geometry(
+    sim_params: SimParams,
+    z_source: float,
+    z_sample: float,
+    x_source_range: tuple[float, float],
+    y_source_range: tuple[float, float],
+) -> tuple[float, float, float, float]:
+    """Return conservative x/y cutoff angles plus ``M`` and ``z_eff``."""
+    z_source_to_sample = z_sample - z_source
+    z_sample_to_detector = sim_params.z_detector - z_sample
+    if z_source_to_sample <= 0 or z_sample_to_detector <= 0:
+        raise ValueError("Fresnel scaling requires z_source < z_sample < z_detector")
+
+    magnification = (
+        z_source_to_sample + z_sample_to_detector
+    ) / z_source_to_sample
+    effective_z = (
+        z_source_to_sample * z_sample_to_detector
+        / (z_source_to_sample + z_sample_to_detector)
+    )
+    source_slope_x = max(map(abs, x_source_range)) / z_source_to_sample
+    source_slope_y = max(map(abs, y_source_range)) / z_source_to_sample
+    detector_slope_x = (
+        sim_params.get_detector_size_x() / (2.0 * magnification * effective_z)
+    )
+    detector_slope_y = (
+        sim_params.get_detector_size_y() / (2.0 * magnification * effective_z)
+    )
+    return (
+        float(np.arctan(source_slope_x + detector_slope_x)),
+        float(np.arctan(source_slope_y + detector_slope_y)),
+        float(magnification),
+        float(effective_z),
+    )
+
+
 def load_spectrum(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     with h5py.File(path, "r") as f:
         return np.array(f["energy"]), np.array(f["pdf"])
@@ -902,18 +938,28 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
     z_distances = [el.z_start for el in elements]
     element_heights = [el.get_thickness() for el in elements]
     if use_fresnel:
-        # Fresnel scaling: use a simple geometric cutoff based on the
-        # sample->detector geometry (not the source->detector full angle).
-        # The angular bandwidth at the sample plane is much narrower.
-        sample_half_size = max(abs(x_range[0]), abs(x_range[1]))
-        cutoff_angle = float(np.arctan(
-            (sim_params.detector_size / 2 + sample_half_size) / sim_params.z_detector
-        ))
+        cutoff_x, cutoff_y, fresnel_m, fresnel_z_eff = compute_fresnel_cutoff_geometry(
+            sim_params,
+            z_source,
+            float(elements[0].z_start),
+            x_range,
+            y_range,
+        )
+        # The current CUDA propagator accepts one scalar cutoff.  Use the
+        # conservative maximum while retaining the per-axis y value in metadata.
+        cutoff_angle = max(cutoff_x, cutoff_y)
         angles = [cutoff_angle] * (len(elements) + 1)
-        max_x_list = [sim_params.detector_size / 2] * (len(elements) + 1)
-        angles_y = list(angles)
-        max_y_list = [sim_params.get_detector_size_y() / 2] * (len(elements) + 1)
-        logger.info(f"Fresnel mode: simple cutoff angle={cutoff_angle:.4f} rad")
+        angles_y = [cutoff_y] * (len(elements) + 1)
+        max_x_list = [sim_params.get_detector_size_x() / (2 * fresnel_m)] * (
+            len(elements) + 1
+        )
+        max_y_list = [sim_params.get_detector_size_y() / (2 * fresnel_m)] * (
+            len(elements) + 1
+        )
+        logger.info(
+            "Fresnel cutoff: x=%.6g rad, y=%.6g rad, scalar=%.6g rad, z_eff=%.6g m",
+            cutoff_x, cutoff_y, cutoff_angle, fresnel_z_eff,
+        )
     else:
         angles, max_x_list = compute_cutoff_angles(
             detector_size=sim_params.detector_size,

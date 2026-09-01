@@ -7,6 +7,11 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BIG_WAVE = REPO_ROOT / "big-wave"
+NIST_LOOKUP = REPO_ROOT / "nist_lookup"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(NIST_LOOKUP) not in sys.path:
+    sys.path.insert(0, str(NIST_LOOKUP))
 if str(BIG_WAVE) not in sys.path:
     sys.path.insert(0, str(BIG_WAVE))
 
