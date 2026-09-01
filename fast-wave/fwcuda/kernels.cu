@@ -3,6 +3,7 @@
 #include "kernels.hpp"
 #include "wrappers.hpp"
 #include <stdio.h>
+#include <stdexcept>
 template <typename S>
 __global__ void propagate_analytically_kernel(DevComplex<S> *d_u, SimParams params, double x_source,
                                               double z) {
@@ -600,6 +601,47 @@ void initialize_uniform_2d(DevComplex<S> *d_u, int nx, int ny, Complex<S> value)
     initialize_uniform_2d_kernel<S><<<gridDim, blockDim>>>(d_u, nx, ny, dev_val);
     check_cuda_result("initialize_uniform_2d", cudaPeekAtLastError());
 }
+
+// Equivalent plane-wave illumination for the Fresnel scaling theorem.  A
+// centred point source produces a constant field; an off-axis point source
+// leaves a linear phase ramp after the spherical quadratic phase is removed.
+// The 1/z amplitude matches the central amplitude of the original 3D
+// spherical-wave initializer.  Geometric 1/M^2 dilution is then supplied by
+// integrating over detector pixels scaled by 1/M.
+template <typename S>
+__global__ void initialize_fresnel_plane_2d_kernel(
+    DevComplex<S> *d_u, int nx, int ny, double dx, double dy, double wl,
+    double x_source, double y_source, double z_source_to_sample) {
+    const int ix = blockIdx.x * blockDim.x + threadIdx.x;
+    const int iy = blockIdx.y * blockDim.y + threadIdx.y;
+    if (ix >= nx || iy >= ny) return;
+
+    const double x = static_cast<double>(ix - nx / 2) * dx;
+    const double y = static_cast<double>(iy - ny / 2) * dy;
+    const double phase = reduce_angle(
+        -2.0 * M_PI * (x * x_source + y * y_source) /
+        (wl * z_source_to_sample));
+    const double amplitude = 1.0 / z_source_to_sample;
+    d_u[iy * nx + ix] = DevComplex<S>{
+        static_cast<S>(amplitude * cos(phase)),
+        static_cast<S>(amplitude * sin(phase))};
+}
+
+template <typename S>
+void initialize_fresnel_plane_2d(
+    DevComplex<S> *d_u, int nx, int ny, double dx, double dy, double wl,
+    double x_source, double y_source, double z_source_to_sample) {
+    if (z_source_to_sample <= 0.0) {
+        throw std::invalid_argument("Fresnel source-to-sample distance must be positive");
+    }
+    constexpr int block_size = 16;
+    dim3 blockDim(block_size, block_size);
+    dim3 gridDim((nx + block_size - 1) / block_size,
+                 (ny + block_size - 1) / block_size);
+    initialize_fresnel_plane_2d_kernel<S><<<gridDim, blockDim>>>(
+        d_u, nx, ny, dx, dy, wl, x_source, y_source, z_source_to_sample);
+    check_cuda_result("initialize_fresnel_plane_2d", cudaPeekAtLastError());
+}
 //3d end
 
 template <typename S>
@@ -922,6 +964,10 @@ template void square_and_downsample_2d<double>(DevComplex<double> *, int, int, d
 
 template void initialize_uniform_2d<float>(DevComplex<float> *, int, int, Complex<float>);
 template void initialize_uniform_2d<double>(DevComplex<double> *, int, int, Complex<double>);
+template void initialize_fresnel_plane_2d<float>(
+    DevComplex<float> *, int, int, double, double, double, double, double, double);
+template void initialize_fresnel_plane_2d<double>(
+    DevComplex<double> *, int, int, double, double, double, double, double, double);
 
 // plasma_sample
 template void apply_plasma_sample_factors_2d<float>(DevComplex<float> *, const SimParams &, double,

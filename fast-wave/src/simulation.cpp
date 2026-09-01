@@ -816,18 +816,20 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
         double y_source = point_source.y.value_or(0.0);
 
         if (config.sim_params.use_fresnel_scaling) {
-            // Fresnel scaling: uniform plane wave (no spherical wave initialization)
-            spdlog::info("  Using Fresnel scaling (z_src={}, avoiding analytical propagation)",
-                        point_source.z);
-            initialize_uniform_2d<S>(d_u, nx, ny, Complex<S>{1.0, 0.0});
-
             // Compute Fresnel parameters: z_eff and M
+            const double z_sample = current_z;  // first optical element z_start
+            const double z_source_to_sample = z_sample - point_source.z;
             {
-                const double z_sample = current_z;  // first optical element z_start
                 compute_fresnel_params(point_source.z, z_sample,
                                        config.sim_params.z_detector,
                                        fresnel_z_eff, fresnel_M);
             }
+            spdlog::info(
+                "  Using Fresnel scaling (z_src={}, tilted plane-wave equivalent)",
+                point_source.z);
+            initialize_fresnel_plane_2d<S>(
+                d_u, nx, ny, dx, dy, config.sim_params.wl,
+                point_source.x, y_source, z_source_to_sample);
             spdlog::info("  Fresnel params: z_eff={:.6e}, M={:.2f}x",
                         fresnel_z_eff, fresnel_M);
         } else {

@@ -47,6 +47,10 @@ __global__ void square_and_downsample_2d_kernel(DevComplex<S> *d_u, int nx, int 
 template <typename S>
 __global__ void initialize_uniform_2d_kernel(DevComplex<S> *d_u, int nx, int ny,
                                               DevComplex<S> value);
+template <typename S>
+__global__ void initialize_fresnel_plane_2d_kernel(
+    DevComplex<S> *d_u, int nx, int ny, double dx, double dy, double wl,
+    double x_source, double y_source, double z_source_to_sample);
 //3d end
 template <typename S>
 __global__ void apply_grating_factors_kernel(DevComplex<S> *d_u, SimParams params,

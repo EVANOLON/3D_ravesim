@@ -38,6 +38,10 @@ void square_and_downsample_2d(DevComplex<S> *d_u, int nx, int ny, S *d_out,
                               double current_z, double dx, double dy);
 template <typename S>
 void initialize_uniform_2d(DevComplex<S> *d_u, int nx, int ny, Complex<S> value);
+template <typename S>
+void initialize_fresnel_plane_2d(
+    DevComplex<S> *d_u, int nx, int ny, double dx, double dy, double wl,
+    double x_source, double y_source, double z_source_to_sample);
 //3d end
 template <typename S>
 void apply_grating_factors(DevComplex<S> *d_u, const SimParams &params, Complex<S> factor_a,
