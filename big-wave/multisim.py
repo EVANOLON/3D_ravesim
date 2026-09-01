@@ -279,6 +279,9 @@ def run_single_simulation(
 
     sub_dir = get_sub_dir(sim_dir, source_idx)
     sub_dct = config.load(sub_dir / "subconfig.yaml")
+    validate_fresnel_mode(
+        sim_params, elements, str(sub_dct["source"].get("type", ""))
+    )
     if sim_params.use_fresnel_scaling:
         if not elements:
             raise ValueError("Fresnel scaling requires at least one optical element")
@@ -563,6 +566,46 @@ def check_simulation_inputs(
         assert 0 <= a <= np.pi / 2, "cutoff angles must be between 0 and pi/2"
 
 
+def fresnel_mode_name(params: SimParams) -> str:
+    if params.use_cone_beam_bpm:
+        return "cone_beam_bpm"
+    if params.use_fresnel_scaling:
+        return "thin"
+    return "off"
+
+
+def validate_fresnel_mode(
+    params: SimParams,
+    elements: list[OpticalElement],
+    source_type: str,
+) -> None:
+    """Reject geometries that the selected Fresnel algorithm cannot represent."""
+    mode = fresnel_mode_name(params)
+    if mode == "off":
+        return
+    if not params.is_2d:
+        raise ValueError("Fresnel scaling is currently supported only in 2D mode")
+    if source_type not in {"point", "points"}:
+        raise ValueError("Fresnel scaling requires point sources")
+    if not elements:
+        raise ValueError("Fresnel scaling requires at least one optical element")
+    supported = {"Sample", "PlasmaSample"}
+    unsupported = [
+        type(element).__name__
+        for element in elements
+        if type(element).__name__ not in supported
+    ]
+    if unsupported:
+        raise ValueError(
+            f"Fresnel scaling supports only Sample/PlasmaSample elements, got {unsupported}"
+        )
+    if mode == "thin" and len(elements) != 1:
+        raise ValueError(
+            "Thin Fresnel scaling requires exactly one optical element; "
+            "use use_cone_beam_bpm=true for multislice or multiple-element propagation"
+        )
+
+
 def compute_fresnel_cutoff_geometry(
     sim_params: SimParams,
     z_source: float,
@@ -765,6 +808,7 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
     materials = collect_all_materials(elements)
 
     multisource = dct["multisource"]
+    validate_fresnel_mode(sim_params, elements, str(multisource.get("type", "")))
     if multisource["type"] == "points":
         nr_source_points = int(multisource["nr_source_points"])
         energy_range = (
@@ -937,6 +981,8 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
 
     z_distances = [el.z_start for el in elements]
     element_heights = [el.get_thickness() for el in elements]
+    fresnel_m = 1.0
+    fresnel_z_eff = 0.0
     if use_fresnel:
         cutoff_x, cutoff_y, fresnel_m, fresnel_z_eff = compute_fresnel_cutoff_geometry(
             sim_params,
@@ -1064,6 +1110,34 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
             "max_x": max_x,
             "energy_range": energy_range,
             "source_points": source_points,
+            "fresnel_mode": fresnel_mode_name(sim_params),
+            "fresnel_geometry": {
+                "version": (
+                    "cone_beam_similarity_bpm_v1"
+                    if sim_params.use_cone_beam_bpm
+                    else "thin_sample_similarity_v1"
+                    if sim_params.use_fresnel_scaling
+                    else "off"
+                ),
+                "reference_z": float(elements[0].z_start) if use_fresnel else None,
+                "source_z": float(z_source) if use_fresnel else None,
+                "magnification": float(fresnel_m),
+                "effective_detector_distance": float(fresnel_z_eff),
+                "material_coordinate_sampling": (
+                    "local_scale_at_slice_midpoint"
+                    if sim_params.use_cone_beam_bpm
+                    else "reference_plane"
+                    if sim_params.use_fresnel_scaling
+                    else "physical_grid"
+                ),
+                "propagation_step_mapping": (
+                    "dz/(m_start*m_end)"
+                    if sim_params.use_cone_beam_bpm
+                    else "single_z_eff_leg"
+                    if sim_params.use_fresnel_scaling
+                    else "physical_dz"
+                ),
+            },
             "runtime": {
                 "big_wave": {
                     "requested": requested_big_wave,

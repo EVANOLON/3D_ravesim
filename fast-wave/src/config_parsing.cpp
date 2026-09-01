@@ -805,6 +805,18 @@ std::string zeropad(int number, std::size_t length) {
             throw std::runtime_error(
                 "Fresnel scaling requires source < first element < detector");
         }
+        for (const auto &element : optical_elements) {
+            if (element->type != OpticalElementType::Sample &&
+                element->type != OpticalElementType::PlasmaSample) {
+                throw std::runtime_error(
+                    "Fresnel scaling supports only Sample/PlasmaSample elements in 2D");
+            }
+        }
+        if (!sim_params.use_cone_beam_bpm && optical_elements.size() != 1) {
+            throw std::runtime_error(
+                "Thin Fresnel scaling requires exactly one optical element; "
+                "enable use_cone_beam_bpm for multislice or multiple-element propagation");
+        }
     }
 
     auto cutoff_angles = parse_cutoff_angles(computed_node["cutoff_angles"]);

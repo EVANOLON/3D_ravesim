@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "nist_lookup"))
 sys.path.insert(0, str(ROOT / "big-wave"))
 
 from config import parse_sim_params
+from multisim import validate_fresnel_mode
 from propagation import SimParams
 
 
@@ -64,6 +65,22 @@ class ConeBeamGeometryTests(unittest.TestCase):
         base["use_cone_beam_bpm"] = "sometimes"
         with self.assertRaises(ValueError):
             parse_sim_params(base)
+
+    def test_mode_validation_separates_thin_and_cb_bpm_scope(self):
+        Sample = type("Sample", (), {})
+        Grating = type("Grating", (), {})
+
+        thin = make_params(ny=4, use_fresnel_scaling=True)
+        validate_fresnel_mode(thin, [Sample()], "points")
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            validate_fresnel_mode(thin, [Sample(), Sample()], "points")
+
+        cb_bpm = make_params(ny=4, use_cone_beam_bpm=True)
+        validate_fresnel_mode(cb_bpm, [Sample(), Sample()], "points")
+        with self.assertRaisesRegex(ValueError, "Sample/PlasmaSample"):
+            validate_fresnel_mode(cb_bpm, [Grating()], "points")
+        with self.assertRaisesRegex(ValueError, "point sources"):
+            validate_fresnel_mode(cb_bpm, [Sample()], "vectors")
 
 
 if __name__ == "__main__":
