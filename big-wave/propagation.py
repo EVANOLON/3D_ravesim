@@ -31,10 +31,15 @@ class SimParams:
     detector_size_x: float = 0.0
     detector_size_y: float = 0.0
     use_fresnel_scaling: bool = False
+    use_cone_beam_bpm: bool = False
     fresnel_magnification: float = field(default=1.0, init=False)
     fresnel_effective_z: float = field(default=0.0, init=False)
+    fresnel_source_z: float = field(default=0.0, init=False)
+    fresnel_reference_z: float = field(default=0.0, init=False)
 
     def __post_init__(self):
+        if self.use_cone_beam_bpm:
+            self.use_fresnel_scaling = True
         if self.is_2d:
             logger.info(
                 f"2D mode: nx={self.nx}, ny={self.ny}, "
@@ -65,6 +70,8 @@ class SimParams:
 
     def configure_fresnel_detector(self, z_source: float, z_sample: float) -> None:
         """Configure the plane-wave geometry equivalent to a point-source cone beam."""
+        self.fresnel_source_z = z_source
+        self.fresnel_reference_z = z_sample
         if not self.use_fresnel_scaling:
             self.fresnel_magnification = 1.0
             self.fresnel_effective_z = 0.0
@@ -82,6 +89,41 @@ class SimParams:
         self.fresnel_magnification = (
             z_source_to_sample + z_sample_to_detector
         ) / z_source_to_sample
+
+    def fresnel_transverse_scale(self, z: float) -> float:
+        """Return the local cone-beam magnification relative to the reference plane."""
+        if not self.use_cone_beam_bpm:
+            return 1.0
+        denominator = self.fresnel_reference_z - self.fresnel_source_z
+        if denominator <= 0:
+            raise ValueError("Cone-beam BPM geometry has not been configured")
+        scale = (z - self.fresnel_source_z) / denominator
+        if scale <= 0:
+            raise ValueError("Cone-beam BPM requires propagation downstream of the source")
+        return scale
+
+    def effective_slice_dz(self, z: float, dz: float) -> float:
+        """Map a physical layer step to the moving-coordinate propagation distance."""
+        if not self.use_cone_beam_bpm:
+            return dz
+        return dz / (
+            self.fresnel_transverse_scale(z)
+            * self.fresnel_transverse_scale(z + dz)
+        )
+
+    def effective_final_dz(self, current_z: float) -> float:
+        """Return the propagation distance from the current plane to the detector."""
+        physical_dz = self.z_detector - current_z
+        if physical_dz < 0:
+            raise ValueError("Current plane is downstream of the detector")
+        if self.use_cone_beam_bpm:
+            return physical_dz / (
+                self.fresnel_transverse_scale(current_z)
+                * self.fresnel_magnification
+            )
+        if self.use_fresnel_scaling:
+            return self.fresnel_effective_z
+        return physical_dz
 
     def effective_detector_geometry(
         self, current_z: float

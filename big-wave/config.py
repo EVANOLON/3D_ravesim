@@ -73,6 +73,9 @@ def parse_sim_params(dct: DictType) -> propagation.SimParams:
         use_fresnel_scaling=get_bool_value(
             dct.get("use_fresnel_scaling", False), "use_fresnel_scaling"
         ),
+        use_cone_beam_bpm=get_bool_value(
+            dct.get("use_cone_beam_bpm", False), "use_cone_beam_bpm"
+        ),
     )
 
 

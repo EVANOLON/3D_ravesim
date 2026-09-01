@@ -627,6 +627,11 @@ parse_optical_elements(const YAML::Node &node, const DeltabetaTable &db_table,
                 (fs_node.as<std::string>("") == "true");
         }
     }
+    if (has_2d && node["use_cone_beam_bpm"]) {
+        params.use_cone_beam_bpm = node["use_cone_beam_bpm"].as<bool>();
+        params.use_fresnel_scaling =
+            params.use_fresnel_scaling || params.use_cone_beam_bpm;
+    }
 
     if (has_2d) {
         params.nx = node["nx"].as<int>();
@@ -778,12 +783,29 @@ std::string zeropad(int number, std::size_t length) {
     const DType dtype = parse_dtype(config_node["dtype"]);
     const double energy = get_scalar(subconfig_node, "energy");
 
-    const SimParams sim_params =
+    SimParams sim_params =
         parse_sim_params(config_node["sim_params"], convert_energy_wavelength(energy));
     const auto db_table = parse_deltabeta_table(subconfig_node["deltabeta_table"]);
     //test
     auto optical_elements = parse_optical_elements(config_node["elements"], db_table, sim_dir);
     auto source = parse_source(subconfig_node["source"]);
+
+    if (sim_params.use_fresnel_scaling) {
+        if (optical_elements.empty() || source->type != SourceType::Point) {
+            throw std::runtime_error(
+                "Fresnel scaling requires a point source and at least one optical element");
+        }
+        const auto *point_source = static_cast<const PointSource *>(source.get());
+        sim_params.fresnel_source_z = point_source->z;
+        sim_params.fresnel_reference_z = optical_elements.front()->z_start;
+        compute_fresnel_params(
+            sim_params.fresnel_source_z, sim_params.fresnel_reference_z,
+            sim_params.z_detector, sim_params.z_eff, sim_params.magnification);
+        if (sim_params.z_eff <= 0.0 || sim_params.magnification <= 1.0) {
+            throw std::runtime_error(
+                "Fresnel scaling requires source < first element < detector");
+        }
+    }
 
     auto cutoff_angles = parse_cutoff_angles(computed_node["cutoff_angles"]);
 

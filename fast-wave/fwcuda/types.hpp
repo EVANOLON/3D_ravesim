@@ -63,8 +63,31 @@ struct SimParams {
 
     // Fresnel scaling (for short source-sample distance)
     bool use_fresnel_scaling = false;
+    bool use_cone_beam_bpm = false;
     double z_eff = 0.0;          // effective propagation distance
     double magnification = 1.0;  // geometric magnification M
+    double fresnel_source_z = 0.0;
+    double fresnel_reference_z = 0.0;
+
+    double fresnel_transverse_scale(double z) const {
+        if (!use_cone_beam_bpm) return 1.0;
+        const double denominator = fresnel_reference_z - fresnel_source_z;
+        if (denominator <= 0.0) return 0.0;
+        return (z - fresnel_source_z) / denominator;
+    }
+
+    double effective_slice_dz(double z, double dz) const {
+        if (!use_cone_beam_bpm) return dz;
+        return dz / (fresnel_transverse_scale(z) * fresnel_transverse_scale(z + dz));
+    }
+
+    double effective_final_dz(double current_z) const {
+        const double physical_dz = z_detector - current_z;
+        if (use_cone_beam_bpm) {
+            return physical_dz / (fresnel_transverse_scale(current_z) * magnification);
+        }
+        return use_fresnel_scaling ? z_eff : physical_dz;
+    }
 
     // 维度标志（内部计算，不暴露给外部）
     bool is_2d() const { return is2d && ny > 1; }
