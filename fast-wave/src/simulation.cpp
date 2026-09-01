@@ -911,15 +911,20 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
 
         current_z = el->z_start + el->total_thickness();
         // spdlog::info("[STEP 18] Current z after element: {}", current_z);
-        const double next_z = get_next_z(config, i);
-        const double remaining_z = next_z - current_z;
-        if (remaining_z > z_tolerance) {
-            // spdlog::info("[STEP 19] Propagating remaining distance: {}", remaining_z);
-            propagate_with_history_2d<S>(config.sim_params, fft, remaining_z, 
-                                        cutoff_freq_x, cutoff_freq_y, d_u, d_U,
-                                        current_z, hist, nx, ny);
-            current_z = next_z;
-            // spdlog::info("[STEP 20] Propagation completed");
+        // Propagate only to the next optical element here.  The final
+        // element-to-detector leg is handled below, where cone-beam Fresnel
+        // scaling can replace the physical distance with z_eff.
+        if (i + 1 < config.optical_elements.size()) {
+            const double next_z = config.optical_elements[i + 1]->z_start;
+            const double remaining_z = next_z - current_z;
+            if (remaining_z > z_tolerance) {
+                // spdlog::info("[STEP 19] Propagating remaining distance: {}", remaining_z);
+                propagate_with_history_2d<S>(config.sim_params, fft, remaining_z,
+                                            cutoff_freq_x, cutoff_freq_y, d_u, d_U,
+                                            current_z, hist, nx, ny);
+                current_z = next_z;
+                // spdlog::info("[STEP 20] Propagation completed");
+            }
         }
     }
     // spdlog::info("[STEP 21] Finished optical elements processing");
@@ -931,7 +936,20 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
                            ? fresnel_z_eff
                            : final_dz;
     if (final_dz > z_tolerance) {
-        propagate_2d<S>(config.sim_params, fft, prop_dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+        if (config.sim_params.use_fresnel_scaling) {
+            // History z coordinates are physical, whereas this propagation is
+            // performed in the equivalent plane-wave geometry.  Do not mix
+            // the two coordinate systems in a single history series.
+            if (hist) {
+                spdlog::warn("Fresnel-scaled detector propagation is omitted from physical-z history");
+            }
+            propagate_2d<S>(config.sim_params, fft, prop_dz,
+                            cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+        } else {
+            propagate_with_history_2d<S>(config.sim_params, fft, prop_dz,
+                                        cutoff_freq_x, cutoff_freq_y, d_u, d_U,
+                                        current_z, hist, nx, ny);
+        }
     }
     // spdlog::info("[STEP 23] Final propagation done");
     if (config.save_debug_wavefields)
@@ -1007,12 +1025,14 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
                 }
 
                 current_z = el->z_start + el->total_thickness();
-                const double next_z = get_next_z(config, i);
-                const double remaining_z = next_z - current_z;
-                if (remaining_z > z_tolerance) {
-                    propagate_2d<S>(config.sim_params, fft, remaining_z, 
-                                  cutoff_freq_x, cutoff_freq_y, d_u, d_U);
-                    current_z = next_z;
+                if (i + 1 < config.optical_elements.size()) {
+                    const double next_z = config.optical_elements[i + 1]->z_start;
+                    const double remaining_z = next_z - current_z;
+                    if (remaining_z > z_tolerance) {
+                        propagate_2d<S>(config.sim_params, fft, remaining_z,
+                                      cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+                        current_z = next_z;
+                    }
                 }
             }
 
