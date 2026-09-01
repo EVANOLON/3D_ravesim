@@ -213,6 +213,7 @@ void propagate_convolve_step_2d(DevComplex<S> *d_U, const SimParams &params, dou
 // 2D样本因子应用核函数
 template <typename S>
 __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams params, double dz,
+                                              double coordinate_scale,
                                               uint32_t *d_sample, double pixel_size_x, double pixel_size_y,
                                               std::size_t x_len, std::size_t y_len, 
                                               DevComplex<double> *d_deltabetas,
@@ -232,8 +233,10 @@ __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams par
     const int idx = iy * nx + ix;
     
     // 计算物理位置（考虑样本偏移和中心位置）
-    const double x = static_cast<double>(ix - nx / 2) * dx + x_position + pixel_size_x * x_len * 0.5;
-    const double y = static_cast<double>(iy - ny / 2) * dy + y_position + pixel_size_y * y_len * 0.5;
+    const double x = static_cast<double>(ix - nx / 2) * dx * coordinate_scale
+                     + x_position + pixel_size_x * x_len * 0.5;
+    const double y = static_cast<double>(iy - ny / 2) * dy * coordinate_scale
+                     + y_position + pixel_size_y * y_len * 0.5;
     
     // 转换为样本网格索引（连续坐标）
     const double x_index = x / pixel_size_x;
@@ -308,6 +311,7 @@ __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams par
 // 2D样本因子应用包装函数
 template <typename S>
 void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                            double coordinate_scale,
                             uint32_t *d_sample, double pixel_size_x, double pixel_size_y,
                             std::size_t x_len, std::size_t y_len, DevComplex<double> *d_deltabetas,
                             int z_slice_index, double x_position, double y_position) {
@@ -347,7 +351,7 @@ void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double
     // fflush(stderr);
 
     apply_sample_factors_2d_kernel<S><<<gridDim, blockDim>>>(
-        d_u, params, dz, d_sample, pixel_size_x, pixel_size_y,
+        d_u, params, dz, coordinate_scale, d_sample, pixel_size_x, pixel_size_y,
         x_len, y_len, d_deltabetas, z_slice_index, x_position, y_position);
 
     cudaError_t err = cudaGetLastError();
@@ -405,7 +409,7 @@ void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double
 //plasma_sample_begin
 template <typename S>
 __global__ void apply_plasma_sample_factors_2d_kernel(
-    DevComplex<S> *d_u, SimParams params, double dz,
+    DevComplex<S> *d_u, SimParams params, double dz, double coordinate_scale,
     DevComplex<double> *d_deltabeta_grid,
     double pixel_size_x, double pixel_size_y,
     std::size_t x_len, std::size_t y_len,
@@ -421,7 +425,8 @@ __global__ void apply_plasma_sample_factors_2d_kernel(
     if (ix >= nx || iy >= ny) return;
     const int idx = iy * nx + ix;
 
-    const double x = static_cast<double>(ix - nx / 2) * dx + x_position + pixel_size_x * x_len * 0.5;
+    const double x = static_cast<double>(ix - nx / 2) * dx * coordinate_scale
+                     + x_position + pixel_size_x * x_len * 0.5;
     const double x_index = x / pixel_size_x;
 
     double x_clamped = x_index;
@@ -436,7 +441,8 @@ __global__ void apply_plasma_sample_factors_2d_kernel(
     double y_frac;
     std::size_t y_floor;
     if (y_len > 1) {
-        const double y = static_cast<double>(iy - ny / 2) * dy + y_position + pixel_size_y * y_len * 0.5;
+        const double y = static_cast<double>(iy - ny / 2) * dy * coordinate_scale
+                         + y_position + pixel_size_y * y_len * 0.5;
         const double y_index = y / pixel_size_y;
         double y_clamped = y_index;
         if (y_clamped < 0.0) y_clamped = 0.0;
@@ -486,6 +492,7 @@ __global__ void apply_plasma_sample_factors_2d_kernel(
 
 template <typename S>
 void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                                     double coordinate_scale,
                                      DevComplex<double> *d_deltabeta_grid,
                                      double pixel_size_x, double pixel_size_y,
                                      std::size_t x_len, std::size_t y_len,
@@ -499,7 +506,7 @@ void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params,
                  (actual_ny + blockDim.y - 1) / blockDim.y);
 
     apply_plasma_sample_factors_2d_kernel<S><<<gridDim, blockDim>>>(
-        d_u, params, dz, d_deltabeta_grid,
+        d_u, params, dz, coordinate_scale, d_deltabeta_grid,
         pixel_size_x, pixel_size_y, x_len, y_len,
         z_slice_index, x_position, y_position);
 
@@ -949,6 +956,7 @@ template void apply_precise_sample_factors<double>(DevComplex<double> *, const S
 template void propagate_analytically_2d<float>(DevComplex<float> *, const SimParams &, double, double, double);
 template void propagate_convolve_step_2d<float>(DevComplex<float> *, const SimParams &, double, double, double);
 template void apply_sample_factors_2d<float>(DevComplex<float> *, const SimParams &, double,
+                                             double,
                                              uint32_t *, double, double, std::size_t, std::size_t,
                                              DevComplex<double> *, int, double, double);
 template void square_and_downsample_2d<float>(DevComplex<float> *, int, int, float *, 
@@ -957,6 +965,7 @@ template void square_and_downsample_2d<float>(DevComplex<float> *, int, int, flo
 template void propagate_analytically_2d<double>(DevComplex<double> *, const SimParams &, double, double, double);
 template void propagate_convolve_step_2d<double>(DevComplex<double> *, const SimParams &, double, double, double);
 template void apply_sample_factors_2d<double>(DevComplex<double> *, const SimParams &, double,
+                                              double,
                                               uint32_t *, double, double, std::size_t, std::size_t,
                                               DevComplex<double> *, int, double, double);
 template void square_and_downsample_2d<double>(DevComplex<double> *, int, int, double *,
@@ -971,8 +980,10 @@ template void initialize_fresnel_plane_2d<double>(
 
 // plasma_sample
 template void apply_plasma_sample_factors_2d<float>(DevComplex<float> *, const SimParams &, double,
+    double,
     DevComplex<double> *, double, double, std::size_t, std::size_t, int, double, double);
 template void apply_plasma_sample_factors_2d<double>(DevComplex<double> *, const SimParams &, double,
+    double,
     DevComplex<double> *, double, double, std::size_t, std::size_t, int, double, double);
 //3d end
 

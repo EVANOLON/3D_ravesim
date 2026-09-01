@@ -551,12 +551,16 @@ void apply_plasma_sample_2d(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *
     cudaMemcpyAsync(d_deltabeta, ps.deltabeta_grid.data(), db_size_bytes, cudaMemcpyHostToDevice);
 
     for (std::size_t i = 0; i < ps.z_len; ++i) {
-        apply_plasma_sample_factors_2d<S>(d_u, params, dz, d_deltabeta,
+        const double slice_z = ps.z_start + static_cast<double>(i) * dz;
+        const double coordinate_scale =
+            params.fresnel_transverse_scale(slice_z + 0.5 * dz);
+        apply_plasma_sample_factors_2d<S>(d_u, params, dz, coordinate_scale, d_deltabeta,
                                           ps.pixel_size_x, ps.pixel_size_y,
                                           ps.x_len, ps.y_len, i,
                                           ps.x_positions[phase_step],
                                           ps.y_positions[phase_step]);
-        propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+        propagate_2d<S>(params, fft, params.effective_slice_dz(slice_z, dz),
+                        cutoff_freq_x, cutoff_freq_y, d_u, d_U);
     }
 
     cudaFree(d_deltabeta);
@@ -578,7 +582,7 @@ void apply_plasma_sample(PlasmaSample ps, DevComplex<S> *d_u, DevComplex<S> *d_U
         for (std::size_t i = 0; i < ps.z_len; ++i) {
             SimParams params_1d = params;
             params_1d.ny = 1;
-            apply_plasma_sample_factors_2d<S>(d_u, params_1d, dz, d_deltabeta,
+            apply_plasma_sample_factors_2d<S>(d_u, params_1d, dz, 1.0, d_deltabeta,
                                               ps.pixel_size_x, 0.0,
                                               ps.x_len, 1, i,
                                               ps.x_positions[phase_step], 0.0);
@@ -674,6 +678,9 @@ void apply_sample_2d(Sample s, DevComplex<S> *d_u, DevComplex<S> *d_U, SimParams
     // }
 
     for (std::size_t i = 0; i < s.z_len; ++i) {
+        const double slice_z = s.z_start + static_cast<double>(i) * dz;
+        const double coordinate_scale =
+            params.fresnel_transverse_scale(slice_z + 0.5 * dz);
         // spdlog::info("  Processing layer {}/{}", i+1, s.z_len);
         // spdlog::info("apply_sample_factors_2d address = {}", fmt::ptr(&apply_sample_factors_2d<S>));
         // spdlog::info("Before calling apply_sample_factors_2d:");
@@ -696,11 +703,13 @@ void apply_sample_2d(Sample s, DevComplex<S> *d_u, DevComplex<S> *d_U, SimParams
             throw std::runtime_error("y_positions index out of range");
         }
         // spdlog::info("  y_position = {}", s.y_positions[phase_step]);
-        apply_sample_factors_2d<S>(d_u, params, dz, d_sample, s.pixel_size_x, s.pixel_size_y,
+        apply_sample_factors_2d<S>(d_u, params, dz, coordinate_scale,
+                                  d_sample, s.pixel_size_x, s.pixel_size_y,
                                   s.x_len, s.y_len, d_deltabetas, i,
                                   s.x_positions[phase_step], s.y_positions[phase_step]);
         // spdlog::info("  Processing layer {}/{}", i+1, s.z_len);
-        propagate_2d<S>(params, fft, dz, cutoff_freq_x, cutoff_freq_y, d_u, d_U);
+        propagate_2d<S>(params, fft, params.effective_slice_dz(slice_z, dz),
+                        cutoff_freq_x, cutoff_freq_y, d_u, d_U);
     }
 
     check_cuda_result("sample", cudaPeekAtLastError());
@@ -921,7 +930,9 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
             const double remaining_z = next_z - current_z;
             if (remaining_z > z_tolerance) {
                 // spdlog::info("[STEP 19] Propagating remaining distance: {}", remaining_z);
-                propagate_with_history_2d<S>(config.sim_params, fft, remaining_z,
+                const double effective_remaining_z =
+                    config.sim_params.effective_slice_dz(current_z, remaining_z);
+                propagate_with_history_2d<S>(config.sim_params, fft, effective_remaining_z,
                                             cutoff_freq_x, cutoff_freq_y, d_u, d_U,
                                             current_z, hist, nx, ny);
                 current_z = next_z;
@@ -934,9 +945,7 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
     // 最终传播到探测器
     // spdlog::info("[STEP 22] Final propagation to detector...");
     const double final_dz = config.sim_params.z_detector - current_z;
-    const double prop_dz = config.sim_params.use_fresnel_scaling
-                           ? fresnel_z_eff
-                           : final_dz;
+    const double prop_dz = config.sim_params.effective_final_dz(current_z);
     if (final_dz > z_tolerance) {
         if (config.sim_params.use_fresnel_scaling) {
             // History z coordinates are physical, whereas this propagation is
@@ -1031,7 +1040,9 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
                     const double next_z = config.optical_elements[i + 1]->z_start;
                     const double remaining_z = next_z - current_z;
                     if (remaining_z > z_tolerance) {
-                        propagate_2d<S>(config.sim_params, fft, remaining_z,
+                        const double effective_remaining_z =
+                            config.sim_params.effective_slice_dz(current_z, remaining_z);
+                        propagate_2d<S>(config.sim_params, fft, effective_remaining_z,
                                       cutoff_freq_x, cutoff_freq_y, d_u, d_U);
                         current_z = next_z;
                     }
@@ -1040,9 +1051,7 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
 
             // 最终传播到探测器
             const double final_dz_p = config.sim_params.z_detector - current_z;
-            const double prop_dz_p = config.sim_params.use_fresnel_scaling
-                                     ? fresnel_z_eff
-                                     : final_dz_p;
+            const double prop_dz_p = config.sim_params.effective_final_dz(current_z);
             if (final_dz_p > z_tolerance) {
                 propagate_2d<S>(config.sim_params, fft, prop_dz_p,
                               cutoff_freq_x, cutoff_freq_y, d_u, d_U);

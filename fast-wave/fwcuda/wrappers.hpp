@@ -21,6 +21,7 @@ void propagate_convolve_step_2d(DevComplex<S> *d_U, const SimParams &params, dou
                                  double cutoff_freq_x, double cutoff_freq_y);
 template <typename S>
 void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                                     double coordinate_scale,
                                      DevComplex<double> *d_deltabeta_grid,
                                      double pixel_size_x, double pixel_size_y,
                                      std::size_t x_len, std::size_t y_len,
@@ -28,6 +29,7 @@ void apply_plasma_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params,
 
 template <typename S>
 void apply_sample_factors_2d(DevComplex<S> *d_u, const SimParams &params, double dz,
+                            double coordinate_scale,
                             uint32_t *d_sample, double pixel_size_x, double pixel_size_y,
                             std::size_t x_len, std::size_t y_len, DevComplex<double> *d_deltabetas,
                             int z_slice_index, double x_position, double y_position);

@@ -27,7 +27,7 @@ __global__ void propagate_convolve_step_2d_kernel(DevComplex<S> *d_U, SimParams 
                                                   double cutoff_freq_x, double cutoff_freq_y);
 template <typename S>
 __global__ void apply_plasma_sample_factors_2d_kernel(
-    DevComplex<S> *d_u, SimParams params, double dz,
+    DevComplex<S> *d_u, SimParams params, double dz, double coordinate_scale,
     DevComplex<double> *d_deltabeta_grid,
     double pixel_size_x, double pixel_size_y,
     std::size_t x_len, std::size_t y_len,
@@ -35,6 +35,7 @@ __global__ void apply_plasma_sample_factors_2d_kernel(
 
 template <typename S>
 __global__ void apply_sample_factors_2d_kernel(DevComplex<S> *d_u, SimParams params, double dz,
+                                              double coordinate_scale,
                                               uint32_t *d_sample, double pixel_size_x, double pixel_size_y,
                                               std::size_t x_len, std::size_t y_len, 
                                               DevComplex<double> *d_deltabetas,
