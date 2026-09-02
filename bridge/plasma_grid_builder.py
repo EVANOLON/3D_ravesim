@@ -30,6 +30,8 @@ from scipy.interpolate import interp1d
 
 logger = logging.getLogger("plasma_grid_builder")
 
+N_AVOGADRO = 6.02214076e23  # 1/mol
+
 
 # ─── 配置 ────────────────────────────────────────────────────────────────────
 
@@ -88,17 +90,18 @@ def build_hybrid_grids(
     profile = get_timestep(multi1d_data, timestep)
 
     materials_map = multi1d_data.get("materials_map", {})
-    plasma_Z = _get_effective_Z(profile, materials_map, config)
+    eff_mat = _effective_material(profile, materials_map)
+    plasma_Z = eff_mat["zbar"]
 
     logger.info(
         f"构建网格: t={timestep}/{multi1d_data['nt']}, "
-        f"geometry={config.geometry}, Z={plasma_Z}"
+        f"geometry={config.geometry}, zbar={plasma_Z}, formula={eff_mat['formula']}"
     )
 
     if config.geometry == "side-on":
-        result = _build_side_on(profile, config, plasma_Z, materials_map)
+        result = _build_side_on(profile, config, eff_mat)
     elif config.geometry == "face-on":
-        result = _build_face_on(profile, config, plasma_Z, materials_map)
+        result = _build_face_on(profile, config, eff_mat)
     else:
         raise ValueError(f"未知几何模式: {config.geometry}")
 
@@ -108,6 +111,7 @@ def build_hybrid_grids(
         "xc_range": (float(profile["XC"].min()), float(profile["XC"].max())),
         "geometry": config.geometry,
         "effective_Z": plasma_Z,
+        "formula": eff_mat["formula"],
     }
     return result
 
@@ -123,8 +127,7 @@ def build_hybrid_grids(
 def _build_side_on(
     profile: dict,
     config: GridConfig,
-    Z: int,
-    materials_map: dict,
+    eff_mat: dict,
 ) -> dict:
     """
     Side-on 几何:
@@ -146,7 +149,8 @@ def _build_side_on(
     dene = profile["DENE"]
     zi = profile["ZI"]
 
-    valid = (dene > 1e10) & (r > 1e-15)
+    # 有效性按质量密度(ρ)判断，不按 DENE：冷/中性物质仍保留
+    valid = r > 1e-15
     if not valid.any():
         logger.warning("side-on: 无有效等离子体")
         return _empty_result(config, "plasma")
@@ -155,9 +159,11 @@ def _build_side_on(
     dene_v = dene[valid]
     zi_v = zi[valid]
     te_v = te[valid]
+    r_v = r[valid]
 
-    # ni = DENE / ZI
-    ni_v = np.where(zi_v > 0.01, dene_v / zi_v, dene_v)
+    # ni 由质量密度计算 (ρ·N_A/Ā)，不再用 DENE/ZI 回退
+    a_bar = eff_mat["a_bar"]
+    ni_v = r_v * N_AVOGADRO / a_bar
 
     # ── x 轴: 插值 Multi1D 剖面到均匀网格 ──
     nx = config.nx
@@ -218,7 +224,9 @@ def _build_side_on(
             "pixel_size_x_m": pixel_size_x_m,
             "pixel_size_z_m": pixel_size_z_m,
             "pixel_size_y_m": 0.0,
-            "Z": Z,
+            "Z": eff_mat["zbar"],
+            "zbar": eff_mat["zbar"],
+            "formula": eff_mat["formula"],
             "z_start_m": 0.5,
         }
     }
@@ -235,8 +243,7 @@ def _build_side_on(
 def _build_face_on(
     profile: dict,
     config: GridConfig,
-    Z: int,
-    materials_map: dict,
+    eff_mat: dict,
 ) -> dict:
     """
     Face-on 几何:
@@ -262,12 +269,12 @@ def _build_face_on(
     # ── 等离子体网格 ──
     if n_hot > 0:
         hot_profile = _mask_profile(profile, hot_mask)
-        result["plasma"] = _build_face_on_zstack(hot_profile, config, Z, "plasma")
+        result["plasma"] = _build_face_on_zstack(hot_profile, config, eff_mat, "plasma")
 
     # ── 固体网格 ──
     if n_cold > 0:
         cold_profile = _mask_profile(profile, cold_mask)
-        result["solid"] = _build_face_on_zstack(cold_profile, config, Z, "solid",
+        result["solid"] = _build_face_on_zstack(cold_profile, config, eff_mat, "solid",
                                                   materials_map)
 
     # ── 设置 z_start ──
@@ -289,7 +296,7 @@ def _build_face_on(
 def _build_face_on_zstack(
     profile: dict,
     config: GridConfig,
-    Z: int,
+    eff_mat: dict,
     kind: str,  # "plasma" | "solid"
     materials_map: Optional[dict] = None,
 ) -> dict:
@@ -301,7 +308,7 @@ def _build_face_on_zstack(
     zi = profile["ZI"]
     mid = profile.get("MID", np.zeros_like(xc, dtype=int))
 
-    valid = (dene > 1e10) & (r > 1e-15)
+    valid = r > 1e-15  # 按质量密度判断有效性，冷/中性物质保留
     if not valid.any():
         return _empty_result(config, kind)
 
@@ -326,7 +333,7 @@ def _build_face_on_zstack(
     pixel_size_z_m = (z_max - z_min) / (nz - 1) * 1e-2 if nz > 1 else pixel_size_z_cm * 1e-2
 
     if kind == "plasma":
-        ni_v = np.where(zi_v > 0.01, dene_v / zi_v, dene_v)
+        ni_v = r_v * N_AVOGADRO / eff_mat["a_bar"]  # ni 由质量密度计算
 
         ne_z = _safe_interp(z_uniform, xc_v, dene_v)
         ni_z = _safe_interp(z_uniform, xc_v, ni_v)
@@ -341,7 +348,9 @@ def _build_face_on_zstack(
             "pixel_size_x_m": pixel_size_x_m,
             "pixel_size_z_m": pixel_size_z_m,
             "pixel_size_y_m": 0.0,
-            "Z": Z,
+            "Z": eff_mat["zbar"],
+            "zbar": eff_mat["zbar"],
+            "formula": eff_mat["formula"],
             "z_start_m": 0.5,
         }
     else:
@@ -394,19 +403,25 @@ def _mask_profile(profile: dict, mask: np.ndarray) -> dict:
             if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) == len(mask)}
 
 
-def _get_effective_Z(profile: dict, materials_map: dict, config: GridConfig) -> int:
-    """从 MID 推断有效原子序数。"""
+def _effective_material(profile: dict, materials_map: dict) -> dict:
+    """由 dominant MID 推断 {formula, zbar, a_bar}（不再把 z 截断为 int）。"""
+    fallback = {"formula": None, "zbar": 6.0, "a_bar": 6.51}
     mid = profile.get("MID", None)
     if mid is None:
-        return config.default_Z
+        return fallback
     mids = mid[mid > 0].astype(int)
     if len(mids) == 0:
-        return config.default_Z
+        return fallback
     unique, counts = np.unique(mids, return_counts=True)
     dominant = unique[np.argmax(counts)]
     info = materials_map.get(dominant, {})
-    z = info.get("z", config.default_Z)
-    return int(z) if z > 0 else config.default_Z
+    z = float(info.get("z", 0.0))
+    a = float(info.get("a", 0.0))
+    return {
+        "formula": info.get("formula"),
+        "zbar": z if z > 0 else 6.0,
+        "a_bar": a if a > 0 else 6.51,
+    }
 
 
 def _safe_interp(

@@ -20,8 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
-# The canonical bridge modules live next to the Multi1D++ distribution.
-BRIDGE_DIR = Path('/mnt/d/rave-sim-main/Multi1D++Portable20241128')
+# The canonical bridge modules live in the repo's bridge/ directory (B' edited).
+BRIDGE_DIR = Path('/mnt/d/rave-sim-main/rave-sim-main/bridge')
 if str(BRIDGE_DIR) not in sys.path:
     sys.path.insert(0, str(BRIDGE_DIR))
 
@@ -145,7 +145,11 @@ def cmd_gen_config(p):
     load_ok = False
     load_err = None
     try:
-        sys.path.insert(0, '/mnt/d/rave-sim-main/rave-sim-main/big-wave')
+        for p in ('/mnt/d/rave-sim-main/rave-sim-main/big-wave',
+                  '/mnt/d/rave-sim-main/rave-sim-main/nist_lookup',
+                  '/mnt/d/rave-sim-main/rave-sim-main/rave_agent/_bfpy'):
+            if p not in sys.path:
+                sys.path.insert(0, p)
         import config as rave_config
         rave_config.load(cfg_path)
         load_ok = True

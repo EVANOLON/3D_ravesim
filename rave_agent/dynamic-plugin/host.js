@@ -62,6 +62,17 @@ return {
     const jobs = new Map()
     let seq = 0
 
+    function classifyJobFailure(exitCode, signal, diagnostic) {
+      const text = String(diagnostic || '').toLowerCase()
+      if (exitCode === 0) return null
+      if (text.includes('memoryerror') || text.includes('cannot allocate memory')) return 'python_memory_error'
+      if (text.includes('no space left on device') || text.includes('enospc')) return 'disk_full'
+      if (exitCode === 137 || exitCode === -9 || signal === 'SIGKILL' || text.includes('killed')) return 'oom_or_sigkill'
+      if (exitCode === 143 || exitCode === -15 || signal === 'SIGTERM') return 'sigterm'
+      if (exitCode === null) return 'process_status_unavailable'
+      return 'exit_' + exitCode
+    }
+
     function spawnSync(argv, cwd, env, maxBytes) {
       return subprocess.spawn({
         argv, cwd, env, graceMs: 5000,
@@ -290,7 +301,7 @@ return {
     register('rave_sim_status',
       'Query the status of a background RAVE-SIM job started by rave_sim_run: running/done/failed, elapsed time, log tail, and whether detected.npy exists.',
       { job_id: { type: 'string', description: 'Job id returned by rave_sim_run' } },
-      { type: 'object', properties: { status: { type: 'string' }, elapsed_s: { type: 'number' }, exit_code: { type: 'number' }, detected: { type: 'boolean' }, log_tail: { type: 'string' } }, additionalProperties: true },
+      { type: 'object', properties: { status: { type: 'string' }, elapsed_s: { type: 'number' }, exit_code: { type: 'number' }, failure_reason: { oneOf: [{ type: 'string' }, { type: 'null' }] }, detected: { type: 'boolean' }, log_tail: { type: 'string' } }, additionalProperties: true },
       async function (args) {
         const job = jobs.get(String(args.job_id || ''))
         if (!job) return { error: 'unknown job_id: ' + args.job_id, known_jobs: Array.from(jobs.keys()) }
@@ -304,7 +315,8 @@ return {
         const err = job.handle.collected.stderr ? job.handle.collected.stderr.readFrom(0).text : ''
         const tail = (out + err).replace(/\s+$/, '').split('\n').slice(-25).join('\n')
         const status = job.settled ? (job.exitCode === 0 ? 'done' : 'failed') : 'running'
-        return { job_id: args.job_id, status, elapsed_s: Number(elapsed.toFixed(1)), exit_code: job.exitCode === null ? -1 : job.exitCode, signal: job.signal === null ? 'none' : job.signal, detected, run_dir: job.runDir, log_tail: tail }
+        const failureReason = status === 'failed' ? classifyJobFailure(job.exitCode, job.signal, tail) : null
+        return { job_id: args.job_id, status, elapsed_s: Number(elapsed.toFixed(1)), exit_code: job.exitCode === null ? -1 : job.exitCode, signal: job.signal === null ? 'none' : job.signal, failure_reason: failureReason, detected, run_dir: job.runDir, log_tail: tail }
       })
 
     register('rave_result_summary',

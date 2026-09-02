@@ -23,7 +23,11 @@ return {
       React.useEffect(function () {
         if (!path && !simDir) return
         let alive = true
-        host.call('rave-plot-png', { path: path || undefined, sim_dir: simDir || undefined, grid: grid || undefined })
+        const rpcArgs = {}
+        if (path) rpcArgs.path = path
+        if (simDir) rpcArgs.sim_dir = simDir
+        if (grid) rpcArgs.grid = true
+        host.call('rave-plot-png', rpcArgs)
           .then(function (r) {
             if (!alive) return
             if (r && r.dataUrl) setImg(r.dataUrl)

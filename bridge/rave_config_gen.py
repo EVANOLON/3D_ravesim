@@ -277,7 +277,8 @@ def _build_elements(
             "ni_grid_path": _rel_path(grid_dir, "ni_grid.npy"),
             "te_grid_path": _rel_path(grid_dir, "te_grid.npy"),
             "zstar_grid_path": _rel_path(grid_dir, "zstar_grid.npy"),
-            "Z": int(p["Z"]),
+            "Z": int(round(float(p.get("zbar", p["Z"])))),
+            "formula": p.get("formula"),
             "x_positions": cfg.phase_stepping if cfg.phase_stepping else [0.0],
         }
         if p.get("pixel_size_y_m", 0.0) > 0:
@@ -299,7 +300,8 @@ def _build_elements(
                 "ni_grid_path": _rel_path(grid_dir, "ni_grid.npy"),
                 "te_grid_path": _rel_path(grid_dir, "te_grid.npy"),
                 "zstar_grid_path": _rel_path(grid_dir, "zstar_grid.npy"),
-                "Z": int(p["Z"]),
+                "Z": int(round(float(p.get("zbar", p["Z"])))),
+                "formula": p.get("formula"),
                 "x_positions": cfg.phase_stepping if cfg.phase_stepping else [0.0],
             })
         else:
