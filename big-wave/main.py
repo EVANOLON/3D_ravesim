@@ -59,7 +59,7 @@ def main() -> None:
     if use_disk_vector:
         scratchfile = path / "scratch.npy"
         u = DiskVector(path / "u.npy", scratchfile, N, dtype)
-        U = DiskVector(path / "U.npy", scratchfile, N, dtype)
+        U = DiskVector(path / "spectrum.npy", scratchfile, N, dtype)
     else:
         del tempdir
         u = NumpyVector(np.zeros(N, dtype=dtype))

@@ -33,6 +33,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "big-wave"))
 
+import config  # noqa: F401, E402
 from propagation import (
     SimParams, propagate, propagate_2d, convert_energy_wavelength,
     square_and_downsample, square_and_downsample_2d,

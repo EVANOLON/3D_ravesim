@@ -3,7 +3,7 @@ PlasmaSample — an OpticalElement for X-ray wave propagation through
 laser-produced plasma described by radiation-hydrodynamic output grids.
 
 Mirrors precise_Sample in structure, but replaces material_index + density
-with ne, ni, Te, Z* grids and calls plasma_delta_beta() per pixel.
+with ne, ni, Te, Z* grids and evaluates plasma optics in vectorized tiles.
 
 Can be imported independently of the rest of big-wave — all heavy imports
 are deferred to apply().
@@ -17,7 +17,11 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from plasma import plasma_delta_beta
+from plasma import (
+    compound_scattering_factors,
+    plasma_delta_beta_grid,
+    plasma_delta_beta_grid_multi,
+)
 
 if TYPE_CHECKING:
     from history import History
@@ -53,11 +57,30 @@ class PlasmaSample:
     ni_grid: np.ndarray     # ion number density [cm^-3]
     te_grid: np.ndarray     # electron temperature [eV]
     zstar_grid: np.ndarray  # average ionization state
-    Z: int                  # atomic number of the plasma element
+    Z: int                  # atomic number (legacy single-element fallback)
     x_positions: np.ndarray # phase-stepping offsets in x [m]
+    # multi-element support (方案 B'): chemical formula; overrides Z when set
+    formula: Optional[str] = None
     # 2D support (defaults for backward compat)
     pixel_size_y: float = 0.0          # pixel size in y [m]; 0 = 1D mode
     y_positions: Optional[np.ndarray] = None  # phase-stepping offsets in y
+
+    def _scattering_factors(self, energy: float):
+        """Per-atom Chantler coefficients (f1bar, f2eff_bar, zbar, z2bar).
+
+        Uses the compound formula when present; otherwise falls back to the
+        legacy single-element Z.
+        """
+        if self.formula:
+            return compound_scattering_factors(self.formula, energy)
+        from plasma import _get_scatterer, _get_element_symbol  # noqa: E402
+
+        scat = _get_scatterer(_get_element_symbol(int(self.Z)), energy)
+        f1bar = scat.f1
+        f2eff_bar = scat.f2 * (scat.mu_total / scat.mu_photo)
+        zbar = float(self.Z)
+        z2bar = float(self.Z) * float(self.Z)
+        return f1bar, f2eff_bar, zbar, z2bar
 
     def check_valid(self) -> None:
         shape = self.ne_grid.shape
@@ -77,6 +100,7 @@ class PlasmaSample:
         assert self.pixel_size_z > 0
         if ndim == 3:
             assert self.pixel_size_y > 0, "3D grids require pixel_size_y > 0"
+            assert shape[1] >= 2 and shape[2] >= 2, "3D grids require at least 2x2 transverse pixels"
 
     def get_thickness(self) -> float:
         return self.pixel_size_z * self.ne_grid.shape[0]
@@ -100,20 +124,18 @@ class PlasmaSample:
             self._apply_1d(u, U, sim_params, cutoff_freq, stepping_iteration, history)
 
     def _apply_2d(self, u, U, sim_params, cutoff_freq, stepping_iteration, history):
-        """2D plasma sample propagation with bilinear interpolation.
-
-        The 2D deltabeta grid (ny × nx) is computed per z-slice by calling
-        plasma_delta_beta() for each pixel, then bilinearly interpolated
-        onto the simulation wavefront grid.  Mirrors Sample._apply_2d().
-        """
+        """2D plasma propagation using mmap-backed, vectorized row tiles."""
         from propagation import (
+            _tile_view,
             convert_energy_wavelength,
             propagate_2d,
+            require_row_aligned_chunk_size,
             square_and_downsample_2d,
         )
 
         energy = convert_energy_wavelength(sim_params.wl)
         nz, ny, nx = self.ne_grid.shape
+        f1bar, f2eff_bar, zbar, z2bar = self._scattering_factors(energy)
         dy_s = self.pixel_size_y if self.pixel_size_y != 0.0 else self.pixel_size_x
 
         x_pos = self.x_positions[stepping_iteration]
@@ -122,84 +144,79 @@ class PlasmaSample:
 
         sim_nx = sim_params.nx
         sim_ny = sim_params.ny
+        require_row_aligned_chunk_size(sim_params.chunk_size, sim_nx, sim_ny)
 
-        for rowidx in range(nz):
+        sim_x = (
+            np.arange(sim_nx, dtype=np.float64) - sim_nx / 2.0
+        ) * sim_params.dx
+        sim_y = (
+            np.arange(sim_ny, dtype=np.float64) - sim_ny / 2.0
+        ) * sim_params.get_dy()
+
+        start_slice = int(getattr(self, "_checkpoint_start_slice", 0))
+        if start_slice < 0 or start_slice > nz:
+            raise ValueError(f"invalid PlasmaSample checkpoint slice {start_slice}/{nz}")
+        checkpoint_callback = getattr(self, "_checkpoint_callback", None)
+
+        for rowidx in range(start_slice, nz):
             slice_z = self.z_start + rowidx * self.pixel_size_z
             coordinate_scale = sim_params.fresnel_transverse_scale(
                 slice_z + 0.5 * self.pixel_size_z
             )
+            x_idx = (
+                sim_x * coordinate_scale
+                + x_pos
+                + nx * self.pixel_size_x * 0.5
+            ) / self.pixel_size_x
+            x_floor_raw = np.floor(x_idx).astype(np.int64)
+            x_frac = x_idx - x_floor_raw
+            inside_x = (x_idx >= 0.0) & (x_idx < float(nx) - 1.0)
+            x_floor = np.clip(x_floor_raw, 0, nx - 2)
             if history is not None:
                 history.push(
                     square_and_downsample_2d(u, sim_params, slice_z), slice_z,
                 )
 
-            # Build the 2D deltabeta grid for this z-slice: (ny, nx)
-            ne_slice = self.ne_grid[rowidx, :, :]
-            ni_slice = self.ni_grid[rowidx, :, :]
-            te_slice = self.te_grid[rowidx, :, :]
-            zs_slice = self.zstar_grid[rowidx, :, :]
-
-            row_deltabeta = np.zeros((ny, nx), dtype=np.complex128)
-            # Vectorise: find non-vacuum pixels
-            mask = ne_slice > 0.0
-            if mask.any():
-                ne_m = ne_slice[mask].ravel()
-                ni_m = ni_slice[mask].ravel()
-                te_m = te_slice[mask].ravel()
-                zs_m = zs_slice[mask].ravel()
-                # Call plasma_delta_beta for each masked pixel
-                d_list = []
-                b_list = []
-                for i in range(len(ne_m)):
-                    d, b, _ = plasma_delta_beta(
-                        float(ne_m[i]), float(ni_m[i]), float(te_m[i]),
-                        float(zs_m[i]), self.Z, energy)
-                    d_list.append(d)
-                    b_list.append(b)
-                row_deltabeta[mask] = np.array(d_list, dtype=np.float64) + \
-                                      1j * np.array(b_list, dtype=np.float64)
-            # vacuum pixels stay at 0+0j
-
             def modifier(idx, chunk):
-                flat = idx + np.arange(len(chunk), dtype=np.int64)
-                ix = flat % sim_nx
-                iy = flat // sim_nx
+                tile, y_start = _tile_view(idx, chunk, sim_nx, sim_ny)
+                rows = tile.shape[0]
+                y_idx = (
+                    sim_y[y_start:y_start + rows] * coordinate_scale
+                    + y_pos
+                    + ny * dy_s * 0.5
+                ) / dy_s
+                y_floor_raw = np.floor(y_idx).astype(np.int64)
+                y_frac = y_idx - y_floor_raw
+                inside_y = (y_idx >= 0.0) & (y_idx < float(ny) - 1.0)
+                y_floor = np.clip(y_floor_raw, 0, ny - 2)
+                x0 = x_floor[None, :]
+                y0 = y_floor[:, None]
 
-                # Physical coordinates (centred, with phase step offset)
-                x = ((ix - sim_nx / 2.0) * sim_params.dx * coordinate_scale
-                     + x_pos + nx * self.pixel_size_x * 0.5)
-                y = ((iy - sim_ny / 2.0) * sim_params.get_dy() * coordinate_scale
-                     + y_pos + ny * dy_s * 0.5)
+                def corner_deltabeta(y_offset, x_offset):
+                    indices = (rowidx, y0 + y_offset, x0 + x_offset)
+                    delta, beta, _ = plasma_delta_beta_grid_multi(
+                        self.ne_grid[indices],
+                        self.ni_grid[indices],
+                        self.te_grid[indices],
+                        self.zstar_grid[indices],
+                        f1bar, f2eff_bar, zbar, z2bar,
+                        energy,
+                    )
+                    return delta + 1j * beta
 
-                # Map to sample grid coordinates
-                x_idx = x / self.pixel_size_x
-                y_idx = y / dy_s
-
-                # Bilinear interpolation — out-of-bounds → deltabeta = 0 (vacuum)
-                x_floor = np.floor(x_idx).astype(np.int64)
-                y_floor = np.floor(y_idx).astype(np.int64)
-                x_frac = x_idx - x_floor.astype(np.float64)
-                y_frac = y_idx - y_floor.astype(np.float64)
-
-                # Mask: inside the plasma grid
-                inside = (x_floor >= 0) & (x_floor < nx - 1) & \
-                         (y_floor >= 0) & (y_floor < ny - 1)
-
-                # Clamp only for in-bounds indexing (out-of-bounds handled by mask)
-                x_fc = np.clip(x_floor, 0, nx - 2)
-                y_fc = np.clip(y_floor, 0, ny - 2)
-
-                db_00 = row_deltabeta[y_fc, x_fc]
-                db_01 = row_deltabeta[y_fc, x_fc + 1]
-                db_10 = row_deltabeta[y_fc + 1, x_fc]
-                db_11 = row_deltabeta[y_fc + 1, x_fc + 1]
-
-                db_y0 = db_00 * (1.0 - x_frac) + db_01 * x_frac
-                db_y1 = db_10 * (1.0 - x_frac) + db_11 * x_frac
-                interpolated_db = db_y0 * (1.0 - y_frac) + db_y1 * y_frac
-                interpolated_db[~inside] = 0.0 + 0.0j  # vacuum outside plasma grid
-
-                chunk *= _material_factor(interpolated_db, self.pixel_size_z, sim_params.wl)
+                db_00 = corner_deltabeta(0, 0)
+                db_01 = corner_deltabeta(0, 1)
+                db_10 = corner_deltabeta(1, 0)
+                db_11 = corner_deltabeta(1, 1)
+                db_y0 = db_00 * (1.0 - x_frac[None, :]) + db_01 * x_frac[None, :]
+                db_y1 = db_10 * (1.0 - x_frac[None, :]) + db_11 * x_frac[None, :]
+                interpolated_db = (
+                    db_y0 * (1.0 - y_frac[:, None]) + db_y1 * y_frac[:, None]
+                )
+                interpolated_db[~(inside_y[:, None] & inside_x[None, :])] = 0.0
+                tile *= _material_factor(
+                    interpolated_db, self.pixel_size_z, sim_params.wl
+                )
 
             u.modify_chunked(sim_params.chunk_size, modifier)
             propagate_2d(
@@ -210,6 +227,10 @@ class PlasmaSample:
                 sim_params.chunk_size, cutoff_freq,
                 sim_nx, sim_ny,
             )
+            if checkpoint_callback is not None:
+                checkpoint_callback(
+                    rowidx + 1, self.z_start + (rowidx + 1) * self.pixel_size_z
+                )
 
     def _apply_1d(
         self,
@@ -229,6 +250,7 @@ class PlasmaSample:
 
         energy = convert_energy_wavelength(sim_params.wl)
         nz, nx = self.ne_grid.shape
+        f1bar, f2eff_bar, zbar, z2bar = self._scattering_factors(energy)
 
         # x-coordinates of the sample column centres (centred on axis)
         row_x = (
@@ -245,18 +267,15 @@ class PlasmaSample:
                     z,
                 )
 
-            # Compute delta + i*beta for each column in this z-slice.
-            row_deltabeta = np.zeros(nx, dtype=np.complex128)
-            for colidx in range(nx):
-                ne = float(self.ne_grid[rowidx, colidx])
-                if ne <= 0.0:
-                    row_deltabeta[colidx] = 0.0  # vacuum
-                    continue
-                ni = float(self.ni_grid[rowidx, colidx])
-                Te = float(self.te_grid[rowidx, colidx])
-                Zs = float(self.zstar_grid[rowidx, colidx])
-                d, b, _ = plasma_delta_beta(ne, ni, Te, Zs, self.Z, energy)
-                row_deltabeta[colidx] = complex(d, b)
+            delta, beta, _ = plasma_delta_beta_grid_multi(
+                self.ne_grid[rowidx, :],
+                self.ni_grid[rowidx, :],
+                self.te_grid[rowidx, :],
+                self.zstar_grid[rowidx, :],
+                f1bar, f2eff_bar, zbar, z2bar,
+                energy,
+            )
+            row_deltabeta = delta + 1j * beta
 
             def modifier(idx: int, chunk: np.ndarray) -> None:
                 start = idx - sim_params.N / 2

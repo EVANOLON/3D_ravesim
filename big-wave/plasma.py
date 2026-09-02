@@ -13,7 +13,7 @@ Physics:
 
   beta = beta_bound + beta_ff
     beta_bound: Chantler mu_photo/mu_total scaled by (Z-Z*)/Z
-    beta_ff:    Kramers inverse bremsstrahlung  [placeholder — to be added]
+    beta_ff:    Kramers inverse bremsstrahlung
 
 References:
   J.D. Jackson, Classical Electrodynamics, 3rd ed., §7.5
@@ -35,6 +35,7 @@ except ImportError:
 _Scatterer = None
 _xrayDB = None
 _scatterer_cache: Dict[Tuple[str, float], object] = {}
+_symbol_cache: Dict[int, str] = {13: "Al"}
 
 
 def _lazy_import_xraydb():
@@ -53,6 +54,15 @@ def _get_scatterer(symbol: str, energy: float):
     if key not in _scatterer_cache:
         _scatterer_cache[key] = _Scatterer(symbol, energy)
     return _scatterer_cache[key]
+
+
+def _get_element_symbol(Z: int) -> str:
+    """Resolve and cache an atomic symbol once per element."""
+    if Z not in _symbol_cache:
+        _lazy_import_xraydb()
+        db = _xrayDB()
+        _symbol_cache[Z] = db.atomic_symbol(Z)
+    return _symbol_cache[Z]
 
 
 def _gaunt_ff(T_e: float, energy: float) -> float:
@@ -175,43 +185,187 @@ def plasma_delta_beta(
             1/e attenuation length [cm] = lambda / (4*pi*beta).
             Returns inf if beta == 0.
     """
+    # Single-element case is a special case of the multi-element formula:
+    # f1bar -> f1(Z), f2eff_bar -> f2(Z)*mu_ratio, zbar -> Z, z2bar -> Z^2.
+    scat = _get_scatterer(_get_element_symbol(Z), energy)
+    f1bar = scat.f1
+    f2eff_bar = scat.f2 * (scat.mu_total / scat.mu_photo)
+    zbar = float(Z)
+    z2bar = float(Z) * float(Z)
+    return plasma_delta_beta_multi(
+        n_e, n_i, T_e, Z_star, f1bar, f2eff_bar, zbar, z2bar, energy
+    )
+
+
+def plasma_delta_beta_grid(
+    ne_grid,
+    ni_grid,
+    te_grid,
+    zstar_grid,
+    Z: int,
+    energy: float,
+) -> Tuple:
+    """Vectorized plasma optics for an arbitrary tile of equally shaped grids.
+
+    Chantler constants and the element symbol are scalar cached values.  All
+    density/temperature arithmetic is performed by NumPy without per-pixel
+    Python calls.
+    """
+    # Single-element case = multi-element formula with f1bar/f2eff/zbar/z2bar.
+    scat = _get_scatterer(_get_element_symbol(Z), energy)
+    f1bar = scat.f1
+    f2eff_bar = scat.f2 * (scat.mu_total / scat.mu_photo)
+    zbar = float(Z)
+    z2bar = float(Z) * float(Z)
+    return plasma_delta_beta_grid_multi(
+        ne_grid, ni_grid, te_grid, zstar_grid, f1bar, f2eff_bar, zbar, z2bar, energy
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Multi-element (compound) plasma optics — 方案 B'
+#
+# Physics (per-atom-average norm):
+#   x_i = nu_i / sum_j nu_j              (atom fraction)
+#   zbar    = sum_i x_i Z_i              (mean atomic number)
+#   z2bar   = sum_i x_i Z_i^2            (mean-square atomic number)
+#   f1bar   = sum_i x_i f1_i             (Chantler f1' + Z, per atom)
+#   f2eff   = sum_i x_i f2_i (mu_tot/mu_photo)_i
+#   q = clip(Z* / zbar, 0, 1)            (common ionization fraction)
+#   delta   = prefactor [n_e + n_i (1-q) f1bar]
+#   beta    = prefactor n_i (1-q) f2eff + beta_ff(q, z2bar)
+# Kramers free-free uses  n_e * n_i * (q^2 * z2bar)   (sum_i n_i Z_i*^2).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def compound_scattering_factors(formula: str, energy: float) -> Tuple[float, float, float, float]:
+    """
+    Per-atom-average Chantler coefficients for a compound formula.
+
+    Returns (f1bar, f2eff_bar, zbar, z2bar).
+    """
+    _lazy_import_xraydb()
+    from nist_lookup.chemparser import chemparse
+
+    comp = chemparse(formula)
+    total = float(sum(comp.values()))
+    if total <= 0:
+        raise ValueError(f"empty composition for formula {formula!r}")
+
+    f1bar = 0.0
+    f2eff_bar = 0.0
+    zbar = 0.0
+    z2bar = 0.0
+    for symbol, count in comp.items():
+        scat = _get_scatterer(symbol, energy)
+        x = float(count) / total
+        f1bar += x * scat.f1
+        f2eff_bar += x * scat.f2 * (scat.mu_total / scat.mu_photo)
+        zbar += x * scat.number
+        z2bar += x * (scat.number ** 2)
+    return f1bar, f2eff_bar, zbar, z2bar
+
+
+def plasma_optics_table_for_elements(elements_dct, energy: float):
+    """
+    Build the per-element plasma optics scalar table for a list of config element
+    dicts at a given energy.  Non-plasma elements map to None; plasma_sample
+    elements map to {formula, f1bar, f2eff_bar, zbar, z2bar}.
+    """
+    table = []
+    for el in elements_dct:
+        if el.get("type") != "plasma_sample":
+            continue
+        formula = el.get("formula")
+        if not formula:
+            # fall back to a single-element description via the legacy Z field
+            z = int(el.get("Z", 0))
+            if z <= 0:
+                raise ValueError(
+                    "plasma_sample requires 'formula' (multi-element) or a valid 'Z'"
+                )
+            scat = _get_scatterer(_get_element_symbol(z), energy)
+            f1bar = scat.f1
+            f2eff_bar = scat.f2 * (scat.mu_total / scat.mu_photo)
+            zbar = float(z)
+            z2bar = float(z) * float(z)
+            table.append({
+                "formula": None,
+                "f1bar": float(f1bar),
+                "f2eff_bar": float(f2eff_bar),
+                "zbar": float(zbar),
+                "z2bar": float(z2bar),
+            })
+            continue
+        f1bar, f2eff_bar, zbar, z2bar = compound_scattering_factors(formula, energy)
+        table.append({
+            "formula": str(formula),
+            "f1bar": float(f1bar),
+            "f2eff_bar": float(f2eff_bar),
+            "zbar": float(zbar),
+            "z2bar": float(z2bar),
+        })
+    return table
+
+
+def _kramers_beta_ff_multi(
+    n_e: float, n_i: float, q: float, z2bar: float, T_e: float, energy: float
+) -> float:
+    """Kramers inverse-bremsstrahlung with mean-square charge (sum_i n_i Z_i*^2)."""
+    if n_e <= 0.0 or n_i <= 0.0 or q <= 0.0 or z2bar <= 0.0 or T_e <= 0.0 or energy <= 0.0:
+        return 0.0
+
+    T_K = T_e * 11604.5
+    nu = energy / 4.135667e-15  # eV -> Hz
+    g_ff = _gaunt_ff(T_e, energy)
+    alpha_ff = (
+        3.7e8
+        * n_e
+        * n_i
+        * (q ** 2 * z2bar)
+        * g_ff
+        / (T_K ** 0.5 * nu ** 3)
+    )
+    lamb_cm = PLANCK_HC * 1.0e-8 / energy
+    return alpha_ff * lamb_cm / (4.0 * pi)
+
+
+def plasma_delta_beta_multi(
+    n_e: float,
+    n_i: float,
+    T_e: float,
+    Z_star: float,
+    f1bar: float,
+    f2eff_bar: float,
+    zbar: float,
+    z2bar: float,
+    energy: float,
+) -> Tuple[float, float, float]:
+    """
+    Multi-element plasma (delta, beta, attenuation_length_cm).
+
+    n_e, n_i in cm^-3; T_e in eV; Z_star = free electrons per nucleus.
+    f1bar/f2eff_bar/zbar/z2bar are the per-atom Chantler coefficients
+    (see compound_scattering_factors).
+    """
     lamb_cm = 1.0e-8 * PLANCK_HC / energy
     prefactor = R_ELECTRON_CM * lamb_cm * lamb_cm / (2.0 * pi)
 
-    # ---- free-electron contribution ----
     delta_free = n_e * prefactor
 
-    # ---- bound-electron contribution (Chantler scaling) ----
-    fraction_bound = (Z - Z_star) / Z if Z_star < Z else 0.0
+    q = (Z_star / zbar) if zbar > 0.0 else 0.0
+    q = min(max(q, 0.0), 1.0)  # clip to [0, 1]
+    fraction_bound = 1.0 - q
 
     if fraction_bound > 0.0 and n_i > 0.0:
-        # Map Z to element symbol for Chantler lookup
-        symbol = {13: "Al"}.get(Z, None)
-        if symbol is None:
-            _lazy_import_xraydb()
-            db = _xrayDB()
-            symbol = db.atomic_symbol(Z)
-            # Keep the session alive only long enough for the lookup.
-            # The Scatterer cache will hold its own references.
-
-        scat = _get_scatterer(symbol, energy)
-
-        # Scale neutral-atom scattering factors by bound-electron fraction.
-        # f1 already includes Z (Thomson) + f1' (anomalous).
-        # f2 is the imaginary anomalous scattering factor.
-        delta_bound = n_i * prefactor * scat.f1 * fraction_bound
-        # beta_photo scales with f2; mu_total/mu_photo accounts for scattering
-        beta_bound = (
-            n_i * prefactor * scat.f2 * fraction_bound * (scat.mu_total / scat.mu_photo)
-        )
+        delta_bound = n_i * prefactor * f1bar * fraction_bound
+        beta_bound = n_i * prefactor * f2eff_bar * fraction_bound
     else:
         delta_bound = 0.0
         beta_bound = 0.0
 
-    # ---- inverse bremsstrahlung (free-free) ----
-    beta_ff = _kramers_beta_ff(n_e, n_i, Z_star, T_e, energy)
+    beta_ff = _kramers_beta_ff_multi(n_e, n_i, q, z2bar, T_e, energy)
 
-    # ---- assemble ----
     delta = delta_free + delta_bound
     beta = beta_bound + beta_ff
 
@@ -223,40 +377,58 @@ def plasma_delta_beta(
     return delta, beta, atlen_cm
 
 
-def plasma_delta_beta_grid(
+def plasma_delta_beta_grid_multi(
     ne_grid,
     ni_grid,
     te_grid,
     zstar_grid,
-    Z: int,
+    f1bar: float,
+    f2eff_bar: float,
+    zbar: float,
+    z2bar: float,
     energy: float,
 ) -> Tuple:
-    """
-    Vectorized wrapper: compute (delta_grid, beta_grid, atlen_grid) over
-    full 2D grids.  Each input grid should be a numpy array of the same shape.
-
-    Returns three numpy arrays of matching shape.
-    """
+    """Vectorized multi-element plasma optics for a tile of equally shaped grids."""
     import numpy as np
 
-    shape = ne_grid.shape
-    delta_grid = np.zeros(shape, dtype=np.float64)
-    beta_grid = np.zeros(shape, dtype=np.float64)
-    atlen_grid = np.zeros(shape, dtype=np.float64)
+    ne = np.asarray(ne_grid, dtype=np.float64)
+    ni = np.asarray(ni_grid, dtype=np.float64)
+    te = np.asarray(te_grid, dtype=np.float64)
+    zstar = np.asarray(zstar_grid, dtype=np.float64)
+    if not (ne.shape == ni.shape == te.shape == zstar.shape):
+        raise ValueError("plasma grid tiles must have identical shapes")
+    if energy <= 0.0:
+        raise ValueError(f"energy must be positive, got {energy}")
 
-    it = np.nditer(ne_grid, flags=["multi_index"])
-    while not it.finished:
-        idx = it.multi_index
-        ne = float(ne_grid[idx])
-        ni = float(ni_grid[idx])
-        te = float(te_grid[idx])
-        zs = float(zstar_grid[idx])
+    lamb_cm = 1.0e-8 * PLANCK_HC / energy
+    prefactor = R_ELECTRON_CM * lamb_cm * lamb_cm / (2.0 * pi)
+    delta = ne * prefactor
+    beta = np.zeros(ne.shape, dtype=np.float64)
 
-        d, b, a = plasma_delta_beta(ne, ni, te, zs, Z, energy)
-        delta_grid[idx] = d
-        beta_grid[idx] = b
-        atlen_grid[idx] = a
+    q = np.where(zbar > 0.0, zstar / zbar, 0.0)
+    q = np.clip(q, 0.0, 1.0)
+    fraction_bound = 1.0 - q
 
-        it.iternext()
+    bound_mask = (fraction_bound > 0.0) & (ni > 0.0)
+    if np.any(bound_mask):
+        bound_scale = ni * prefactor * fraction_bound
+        delta = delta + np.where(bound_mask, bound_scale * f1bar, 0.0)
+        beta += np.where(bound_mask, bound_scale * f2eff_bar, 0.0)
 
-    return delta_grid, beta_grid, atlen_grid
+    ff_mask = (ne > 0.0) & (ni > 0.0) & (q > 0.0) & (z2bar > 0.0) & (te > 0.0)
+    if np.any(ff_mask):
+        nu = energy / 4.135667e-15
+        alpha_ff = np.zeros(ne.shape, dtype=np.float64)
+        alpha_ff[ff_mask] = (
+            3.7e8
+            * ne[ff_mask]
+            * ni[ff_mask]
+            * (np.square(q[ff_mask]) * z2bar)
+            / (np.sqrt(te[ff_mask] * 11604.5) * nu ** 3)
+        )
+        beta += alpha_ff * lamb_cm / (4.0 * pi)
+
+    atlen = np.full(ne.shape, np.inf, dtype=np.float64)
+    positive_beta = beta > 0.0
+    atlen[positive_beta] = lamb_cm / (4.0 * pi * beta[positive_beta])
+    return delta, beta, atlen

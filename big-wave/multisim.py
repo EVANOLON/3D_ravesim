@@ -16,6 +16,7 @@ import h5py  # type: ignore
 
 from checkpoint import RunCheckpoint
 import config
+import plasma
 from history import History
 from optical_element import (
     DeltabetaTable,
@@ -898,6 +899,9 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
                 "deltabeta_table": deltabeta_table_to_tuples(
                     generate_deltabeta_table(materials, energies[i])
                 ),
+                "plasma_optics_table": plasma.plasma_optics_table_for_elements(
+                    dct["elements"], energies[i]
+                ),
             }
             for i in range(nr_source_points)
         ]
@@ -970,6 +974,9 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
                     "energy": energy,
                     "deltabeta_table": deltabeta_table_to_tuples(
                         generate_deltabeta_table(materials, energy)
+                    ),
+                    "plasma_optics_table": plasma.plasma_optics_table_for_elements(
+                        dct["elements"], energy
                     ),
                 }
             )
