@@ -541,19 +541,53 @@ __global__ void square_and_downsample_2d_kernel(DevComplex<S> *d_u, int nx, int 
     const double x_max = x_det + detector_pixel_size_x * 0.5;
     const double y_min = y_det - detector_pixel_size_y * 0.5;
     const double y_max = y_det + detector_pixel_size_y * 0.5;
-    
-    // 转换为采样场网格索引
-    const int i_min = max(static_cast<int>(x_min / dx) + nx / 2, 0);
-    const int i_max = min(static_cast<int>(x_max / dx) + nx / 2, nx);
-    const int j_min = max(static_cast<int>(y_min / dy) + ny / 2, 0);
-    const int j_max = min(static_cast<int>(y_max / dy) + ny / 2, ny);
-    
-    // 对区域内所有采样点进行强度累加
+
+    // ------------------------------------------------------------------
+    // Area-weighted integration (fixes count-map holes/ripple when the
+    // effective detector pixel is smaller than, or not an integer multiple
+    // of, the simulation grid spacing dx/dy).
+    //
+    // Grid point k sits at physical x = (k - n/2)*spacing, i.e. at absolute
+    // cell coordinate x/spacing + n/2 = k, and represents the cell
+    // [k - 0.5, k + 0.5] in absolute cell coordinates.  A detector pixel
+    // spans absolute cell coordinates [x_min/dx + nx/2, x_max/dx + nx/2].
+    // The pixel's overlap with every touched cell is a fraction in [0,1]
+    // per axis; the cell intensity |u|^2 is weighted by the product of the
+    // two fractions instead of being counted once.  This matches the
+    // separable area integrator (big-wave area_v1) and keeps the total
+    // intensity scale dx*dy identical to the previous counting kernel when
+    // detector_pixel_size is an exact integer multiple of the spacing.
+    // ------------------------------------------------------------------
+    const double x_lo_cell = x_min / dx + nx / 2;   // absolute cell coord lo
+    const double x_hi_cell = x_max / dx + nx / 2;   // absolute cell coord hi
+    const double y_lo_cell = y_min / dy + ny / 2;
+    const double y_hi_cell = y_max / dy + ny / 2;
+
+    int i_min = static_cast<int>(floor(x_lo_cell - 0.5));
+    int i_max = static_cast<int>(floor(x_hi_cell + 0.5));    // inclusive
+    int j_min = static_cast<int>(floor(y_lo_cell - 0.5));
+    int j_max = static_cast<int>(floor(y_hi_cell + 0.5));    // inclusive
+
+    i_min = max(i_min, 0);
+    i_max = min(i_max, nx - 1);
+    j_min = max(j_min, 0);
+    j_max = min(j_max, ny - 1);
+
     double sum = 0.0;
-    for (int j = j_min; j < j_max; ++j) {
-        for (int i = i_min; i < i_max; ++i) {
+    for (int j = j_min; j <= j_max; ++j) {
+        const double cell_y_lo = static_cast<double>(j) - 0.5;
+        const double cell_y_hi = static_cast<double>(j) + 0.5;
+        const double ov_y = fmax(0.0, fmin(y_hi_cell, cell_y_hi)
+                                      - fmax(y_lo_cell, cell_y_lo));
+        for (int i = i_min; i <= i_max; ++i) {
+            const double cell_x_lo = static_cast<double>(i) - 0.5;
+            const double cell_x_hi = static_cast<double>(i) + 0.5;
+            const double ov_x = fmax(0.0, fmin(x_hi_cell, cell_x_hi)
+                                          - fmax(x_lo_cell, cell_x_lo));
+            if (ov_x <= 0.0 || ov_y <= 0.0) continue;
             const int idx = j * nx + i;
-            sum += d_u[idx].x * d_u[idx].x + d_u[idx].y * d_u[idx].y;
+            const double w = ov_x * ov_y;
+            sum += (d_u[idx].x * d_u[idx].x + d_u[idx].y * d_u[idx].y) * w;
         }
     }
     
