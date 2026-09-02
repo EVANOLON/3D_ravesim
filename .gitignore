@@ -69,3 +69,8 @@ notebooks/shockwavetest_260725/
 multi1d_to_rave/
 rave-sim-3d.zip
 rave-sim-260901.zip
+
+# Compiled native extensions
+*.so
+*.dylib
+*.dll
