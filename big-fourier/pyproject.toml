@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "bfpy"
 requires-python = ">=3.9"
-version = "0.1.0"
+version = "0.3.0"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

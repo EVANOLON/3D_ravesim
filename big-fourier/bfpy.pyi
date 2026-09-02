@@ -3,6 +3,7 @@
 
 import numpy as np
 from pathlib import Path
+from typing import Any, Callable
 
 # This file contains python stubs definitions so that bfpy works with mypy.
 # More info here: https://pyo3.rs/v0.16.4/python_typing_hints.html
@@ -15,6 +16,29 @@ def generate_header_c16(filename: PathOrStr, len: int) -> None: ...
 def fft_c8(infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr) -> None: ...
 def ifft_c8(infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr) -> None: ...
 def generate_header_c8(filename: PathOrStr, len: int) -> None: ...
+
+ProgressCallback = Callable[[str, int, int], Any]
+
+def fft2_c16(
+    infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr,
+    nx: int, ny: int, progress_cb: ProgressCallback | None = ...,
+    cancel_token: Any | None = ..., memory_budget_bytes: int | None = ...,
+) -> None: ...
+def ifft2_c16(
+    infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr,
+    nx: int, ny: int, progress_cb: ProgressCallback | None = ...,
+    cancel_token: Any | None = ..., memory_budget_bytes: int | None = ...,
+) -> None: ...
+def fft2_c8(
+    infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr,
+    nx: int, ny: int, progress_cb: ProgressCallback | None = ...,
+    cancel_token: Any | None = ..., memory_budget_bytes: int | None = ...,
+) -> None: ...
+def ifft2_c8(
+    infile: PathOrStr, outfile: PathOrStr, scratchfile: PathOrStr,
+    nx: int, ny: int, progress_cb: ProgressCallback | None = ...,
+    cancel_token: Any | None = ..., memory_budget_bytes: int | None = ...,
+) -> None: ...
 
 class ChunkedEditor:
     """
