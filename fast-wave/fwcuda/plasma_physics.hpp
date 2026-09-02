@@ -68,6 +68,55 @@ inline void plasma_delta_beta_host(
         attenuation_length_cm = INFINITY;
 }
 
+// ── multi-element (compound) plasma optics — 方案 B' ──────────────────────────
+// Per-atom-average Chantler coefficients (f1bar, f2eff_bar, zbar, z2bar) are
+// precomputed in Python and passed here; per-pixel delta/beta is evaluated on
+// the host.  Replaces the empirical 0.5 / 0.1·∛Z approximation above.
+inline double kramers_beta_ff_multi(double n_e, double n_i, double q, double z2bar,
+                                    double T_e, double energy) {
+    if (n_e <= 0.0 || n_i <= 0.0 || q <= 0.0 || z2bar <= 0.0 || T_e <= 0.0 || energy <= 0.0)
+        return 0.0;
+    const double T_K = T_e * 11604.5;
+    const double nu = energy / 4.135667e-15;
+    const double g_ff = gaunt_ff(T_e, energy);
+    const double alpha_ff = 3.7e8 * n_e * n_i * (q * q * z2bar) * g_ff
+                            / (std::sqrt(T_K) * nu * nu * nu);
+    const double lamb_cm = energy_to_wavelength_cm(energy);
+    return alpha_ff * lamb_cm / (4.0 * M_PI);
+}
+
+inline void plasma_delta_beta_host_multi(
+    double n_e, double n_i, double T_e, double Z_star,
+    double f1bar, double f2eff_bar, double zbar, double z2bar,
+    double energy, double &delta, double &beta, double &attenuation_length_cm)
+{
+    const double lamb_cm = energy_to_wavelength_cm(energy);
+    const double prefactor = R_ELECTRON_CM * lamb_cm * lamb_cm / (2.0 * M_PI);
+
+    const double delta_free = n_e * prefactor;
+
+    double q = (zbar > 0.0) ? (Z_star / zbar) : 0.0;
+    q = std::min(std::max(q, 0.0), 1.0);
+    const double fraction_bound = 1.0 - q;
+
+    double delta_bound = 0.0;
+    double beta_bound = 0.0;
+    if (fraction_bound > 0.0 && n_i > 0.0) {
+        delta_bound = n_i * prefactor * f1bar * fraction_bound;
+        beta_bound = n_i * prefactor * f2eff_bar * fraction_bound;
+    }
+
+    const double beta_ff = kramers_beta_ff_multi(n_e, n_i, q, z2bar, T_e, energy);
+
+    delta = delta_free + delta_bound;
+    beta = beta_bound + beta_ff;
+
+    if (beta > 0.0)
+        attenuation_length_cm = lamb_cm / (4.0 * M_PI * beta);
+    else
+        attenuation_length_cm = INFINITY;
+}
+
 } // namespace plasma_physics
 
 #endif // _FAST_WAVE_PLASMA_PHYSICS_HPP

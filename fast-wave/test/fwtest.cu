@@ -373,8 +373,10 @@ int main() {
         expect(grating.deltabeta_b == Complex<double>{12., 0.});
         expect(grating.deltabeta_substrate == Complex<double>{13., 0.});
 
+        std::vector<PlasmaOptics> plasma_optics;
+        std::size_t plasma_idx = 0;
         const auto optical_element_ptr =
-            parse_optical_element(grating_node, db_table, fs::path("/asdf-config-dir"));
+            parse_optical_element(grating_node, db_table, fs::path("/asdf-config-dir"), plasma_optics, plasma_idx);
         const auto grating_ptr = static_cast<Grating *>(optical_element_ptr.get());
         expect(grating_ptr->pitch == 0.125);
     };

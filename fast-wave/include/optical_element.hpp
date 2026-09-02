@@ -104,7 +104,8 @@ struct PlasmaSample : public OpticalElement {
     std::vector<float> ni_grid;                  // ion density [cm^-3]
     std::vector<float> te_grid;                  // electron temperature [eV]
     std::vector<float> zstar_grid;               // average ionisation state
-    int Z;                                       // atomic number
+    int Z;                                       // atomic number (legacy)
+    double f1bar, f2eff_bar, zbar, z2bar;        // multi-element Chantler coefficients (B')
 
     // Pre-computed deltabeta (set at parse time)
     std::vector<Complex<double>> deltabeta_grid;

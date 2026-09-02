@@ -387,7 +387,8 @@ template <typename Key>
 
 //plasma_sample_begin
 [[nodiscard]] PlasmaSample parse_plasma_sample(const YAML::Node &node,
-                                               const fs::path &sim_dir) {
+                                               const fs::path &sim_dir,
+                                               const PlasmaOptics &optics) {
     const auto z_start = get_scalar(node, "z_start");
     const auto pixel_size_x = get_scalar(node, "pixel_size_x");
     const auto pixel_size_y = node["pixel_size_y"] ? get_scalar(node, "pixel_size_y") : pixel_size_x;
@@ -443,6 +444,10 @@ template <typename Key>
     ps.te_grid = std::move(te_data);
     ps.zstar_grid = std::move(zs_data);
     ps.Z = Z;
+    ps.f1bar = optics.f1bar;
+    ps.f2eff_bar = optics.f2eff_bar;
+    ps.zbar = optics.zbar;
+    ps.z2bar = optics.z2bar;
     ps.x_len = x_len;
     ps.y_len = y_len;
     ps.z_len = z_len;
@@ -457,27 +462,32 @@ void fill_plasma_deltabeta_grid(PlasmaSample &ps, double energy) {
     ps.deltabeta_grid.resize(total);
     for (std::size_t i = 0; i < total; ++i) {
         const float ne = ps.ne_grid[i];
-        if (ne <= 0.0f) {
+        const float ni = ps.ni_grid[i];
+        // vacuum by ion density (not ne), so cold/neutral matter is kept
+        if (ni <= 0.0f) {
             ps.deltabeta_grid[i] = Complex<double>{0., 0.};
             continue;
         }
-        const float ni = ps.ni_grid[i];
         const float te = ps.te_grid[i];
         const float zs = ps.zstar_grid[i];
         double d, b, atlen;
-        plasma_physics::plasma_delta_beta_host(
+        plasma_physics::plasma_delta_beta_host_multi(
             static_cast<double>(ne), static_cast<double>(ni),
             static_cast<double>(te), static_cast<double>(zs),
-            ps.Z, energy, d, b, atlen);
+            ps.f1bar, ps.f2eff_bar, ps.zbar, ps.z2bar,
+            energy, d, b, atlen);
         ps.deltabeta_grid[i] = Complex<double>{d, b};
     }
-    spdlog::info("Filled PlasmaSample deltabeta_grid ({} elements, energy={:.1f} eV)", total, energy);
+    spdlog::info("Filled PlasmaSample deltabeta_grid ({} elements, energy={:.1f} eV, f1bar={:.4f})",
+                 total, energy, ps.f1bar);
 }
 //plasma_sample_end
 
 [[nodiscard]] std::unique_ptr<OpticalElement> parse_optical_element(const YAML::Node &node,
                                                                     const DeltabetaTable &db_table,
-                                                                    const fs::path &sim_dir) {
+                                                                    const fs::path &sim_dir,
+                                                                    const std::vector<PlasmaOptics> &plasma_optics,
+                                                                    std::size_t &plasma_idx) {
     const auto type = node["type"].as<std::string>();
     if (type == "grating") {
         return std::make_unique<Grating>(parse_grating(node, db_table));
@@ -488,7 +498,11 @@ void fill_plasma_deltabeta_grid(PlasmaSample &ps, double energy) {
     } else if (type == "precise_sample") {
         return std::make_unique<PreciseSample>(parse_precise_sample(node, db_table, sim_dir));
     } else if (type == "plasma_sample") {
-        return std::make_unique<PlasmaSample>(parse_plasma_sample(node, sim_dir));
+        if (plasma_idx >= plasma_optics.size()) {
+            throw std::runtime_error("plasma_optics_table has fewer entries than plasma_sample elements");
+        }
+        const PlasmaOptics &optics = plasma_optics[plasma_idx++];
+        return std::make_unique<PlasmaSample>(parse_plasma_sample(node, sim_dir, optics));
     } else {
         throw std::runtime_error("Unknown optical element type: " + type);
     }
@@ -496,12 +510,30 @@ void fill_plasma_deltabeta_grid(PlasmaSample &ps, double energy) {
 
 [[nodiscard]] std::vector<std::unique_ptr<OpticalElement>>
 parse_optical_elements(const YAML::Node &node, const DeltabetaTable &db_table,
-                       const fs::path &sim_dir) {
+                       const fs::path &sim_dir,
+                       const std::vector<PlasmaOptics> &plasma_optics) {
     std::vector<std::unique_ptr<OpticalElement>> elements;
+    std::size_t plasma_idx = 0;
     for (std::size_t i = 0; i < node.size(); ++i) {
-        elements.push_back(parse_optical_element(node[i], db_table, sim_dir));
+        elements.push_back(parse_optical_element(node[i], db_table, sim_dir, plasma_optics, plasma_idx));
     }
     return elements;
+}
+
+[[nodiscard]] std::vector<PlasmaOptics> parse_plasma_optics_table(const YAML::Node &node) {
+    std::vector<PlasmaOptics> table;
+    if (!node || !node.IsSequence()) {
+        return table;  // absent / empty
+    }
+    for (const auto &entry : node) {
+        PlasmaOptics o;
+        o.f1bar = get_scalar(entry, "f1bar");
+        o.f2eff_bar = get_scalar(entry, "f2eff_bar");
+        o.zbar = get_scalar(entry, "zbar");
+        o.z2bar = get_scalar(entry, "z2bar");
+        table.push_back(o);
+    }
+    return table;
 }
 
 [[nodiscard]] DeltabetaTable parse_deltabeta_table(const YAML::Node &node) {
@@ -786,8 +818,9 @@ std::string zeropad(int number, std::size_t length) {
     SimParams sim_params =
         parse_sim_params(config_node["sim_params"], convert_energy_wavelength(energy));
     const auto db_table = parse_deltabeta_table(subconfig_node["deltabeta_table"]);
+    const auto plasma_optics = parse_plasma_optics_table(subconfig_node["plasma_optics_table"]);
     //test
-    auto optical_elements = parse_optical_elements(config_node["elements"], db_table, sim_dir);
+    auto optical_elements = parse_optical_elements(config_node["elements"], db_table, sim_dir, plasma_optics);
     auto source = parse_source(subconfig_node["source"]);
 
     if (sim_params.use_fresnel_scaling) {

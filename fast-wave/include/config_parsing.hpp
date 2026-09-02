@@ -12,6 +12,12 @@ namespace fs = std::filesystem;
 
 using DeltabetaTable = std::vector<std::pair<Material, Complex<double>>>;
 
+// Per-element multi-element Chantler coefficients (方案 B'), precomputed in
+// Python and stored in subconfig.yaml under `plasma_optics_table`.
+struct PlasmaOptics {
+    double f1bar, f2eff_bar, zbar, z2bar;
+};
+
 [[nodiscard]] Complex<double> db_table_lookup(const Material &mat, const DeltabetaTable &db_table);
 
 [[nodiscard]] Grating parse_grating(const YAML::Node &node, const DeltabetaTable &db_table);
@@ -28,16 +34,22 @@ using DeltabetaTable = std::vector<std::pair<Material, Complex<double>>>;
 
 //plasma_sample_begin
 [[nodiscard]] PlasmaSample parse_plasma_sample(const YAML::Node &node,
-                                               const fs::path &sim_dir);
+                                               const fs::path &sim_dir,
+                                               const PlasmaOptics &optics);
 //plasma_sample_end
 
 [[nodiscard]] std::unique_ptr<OpticalElement> parse_optical_element(const YAML::Node &node,
                                                                     const DeltabetaTable &db_table,
-                                                                    const fs::path &sim_dir);
+                                                                    const fs::path &sim_dir,
+                                                                    const std::vector<PlasmaOptics> &plasma_optics,
+                                                                    std::size_t &plasma_idx);
 
 [[nodiscard]] std::vector<std::unique_ptr<OpticalElement>>
 parse_optical_elements(const YAML::Node &node, const DeltabetaTable &db_table,
-                       const fs::path &sim_dir);
+                       const fs::path &sim_dir,
+                       const std::vector<PlasmaOptics> &plasma_optics);
+
+[[nodiscard]] std::vector<PlasmaOptics> parse_plasma_optics_table(const YAML::Node &node);
 
 [[nodiscard]] DeltabetaTable parse_deltabeta_table(const YAML::Node &node);
 
