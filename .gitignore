@@ -47,3 +47,25 @@ post-processing/*.txt
 
 # Images (experiment result figures)
 *.png
+
+# Large archives / datasets / misc experiment artifacts
+*.tar
+*.zip
+*.gz
+dsh-offline-*/
+grid/260625-*/
+grid/260625-*
+grid/260713.tar
+grid/260716/
+grid/Rawdata/
+grid/plasmadata/
+grid/260208-full/
+grid/data.zip
+grid/.mplconfig/
+grid/*.npy
+notebooks/capsule_test_260714/
+notebooks/shockwavetest_260625/
+notebooks/shockwavetest_260725/
+multi1d_to_rave/
+rave-sim-3d.zip
+rave-sim-260901.zip
