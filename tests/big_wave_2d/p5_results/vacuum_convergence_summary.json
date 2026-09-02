@@ -1,0 +1,35 @@
+{
+  "comparisons": [
+    {
+      "centerline_relative_l2": 0.00035598267456842924,
+      "coarse": [
+        4096,
+        4096
+      ],
+      "energy_relative_difference": 1.6632038020248394e-08,
+      "fine": [
+        8192,
+        8192
+      ],
+      "peak_relative_difference": 0.0005874141561267121
+    },
+    {
+      "centerline_relative_l2": 0.00011559465642686219,
+      "coarse": [
+        8192,
+        8192
+      ],
+      "energy_relative_difference": 2.6963617889531826e-08,
+      "fine": [
+        16384,
+        16384
+      ],
+      "peak_relative_difference": 5.3055907408398156e-05
+    }
+  ],
+  "cutoff_frequency": 250000.0,
+  "integrator": "area_v1",
+  "mode": "vacuum",
+  "simulation_fov": 0.0032768,
+  "status": "passed"
+}
