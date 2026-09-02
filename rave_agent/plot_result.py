@@ -70,7 +70,7 @@ def main():
         plt.ylabel('intensity')
         plt.title(f'{Path(args.path).name} — 1D detector profile')
     else:
-        plt.imshow(arr, aspect='auto', cmap='inferno')
+        plt.imshow(arr, aspect='equal', cmap='inferno')
         plt.colorbar(label='intensity')
         plt.xlabel('x pixel')
         plt.ylabel('y pixel')
