@@ -40,6 +40,36 @@ import wavesim
 logger = logging.getLogger("big-wave")
 
 
+def point_source_geometry_2d(source_dct: dict, multisource: dict) -> dict:
+    """Resolve the actual prepared source, never resample an old run implicitly."""
+    explicit_y = "y" in source_dct
+    if not explicit_y and any(
+        float(value) != 0.0
+        for value in multisource.get("y_range", [0.0, 0.0])
+    ):
+        raise ValueError(
+            "2D subconfig source.y is missing but multisource.y_range is nonzero; "
+            "regenerate the prepared simulation with explicit source.y values. "
+            "Existing outputs must not be mixed with the regenerated source ensemble."
+        )
+    position = {
+        axis: float(source_dct.get(axis, 0.0)) for axis in ("x", "y", "z")
+    }
+    if not all(np.isfinite(value) for value in position.values()):
+        raise ValueError("2D point-source x/y/z coordinates must be finite")
+    if not explicit_y:
+        logger.warning(
+            "2D source.y is absent; using legacy y=0 m "
+            "(no nonzero y_range requested)"
+        )
+    return {
+        "type": "point",
+        "units": "m",
+        **position,
+        "y_origin": "explicit" if explicit_y else "legacy_default_zero",
+    }
+
+
 def _git_commit() -> str:
     """Return the source revision used to create a simulation, if available."""
     try:
@@ -276,10 +306,21 @@ def run_single_simulation(
     check_backend_runtime_safety(sim_params, use_disk_vector)
     dtype = config.parse_dtype(dct)
     config.check_chunk_memory_safety(sim_params, dtype.itemsize)
-    elements = [config.parse_optical_element(el, sim_dir) for el in dct["elements"]]
-
     sub_dir = get_sub_dir(sim_dir, source_idx)
     sub_dct = config.load(sub_dir / "subconfig.yaml")
+    source_geometry = None
+    if sim_params.is_2d and sub_dct["source"].get("type") == "point":
+        source_geometry = point_source_geometry_2d(
+            sub_dct["source"], dct["multisource"]
+        )
+        logger.info(
+            "2D point source: x=%.9g m, y=%.9g m, z=%.9g m (%s)",
+            source_geometry["x"],
+            source_geometry["y"],
+            source_geometry["z"],
+            source_geometry["y_origin"],
+        )
+    elements = [config.parse_optical_element(el, sim_dir) for el in dct["elements"]]
     validate_fresnel_mode(
         sim_params, elements, str(sub_dct["source"].get("type", ""))
     )
@@ -459,6 +500,9 @@ def run_single_simulation(
         if sim_params.is_2d:
             detector_metadata = copy.deepcopy(sim_params.detector_last_metadata)
             detector_metadata["phase_steps"] = len(detector_outputs)
+            if source_geometry is not None:
+                detector_metadata["source_geometry"] = source_geometry
+                config.save(sub_dir / "source_geometry.yaml", source_geometry)
             config.save(sub_dir / "detector_metadata.yaml", detector_metadata)
     finally:
         for detector_output in detector_outputs:
@@ -1015,7 +1059,7 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
         )
     else:
         angles, max_x_list = compute_cutoff_angles(
-            detector_size=sim_params.detector_size,
+            detector_size=sim_params.get_detector_size_x(),
             dx=sim_params.dx,
             energy_range=energy_range,
             z_source=z_source,
@@ -1025,9 +1069,8 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
             max_x=max_x,
         )
         if sim_params.is_2d:
-            # rectangular detector: compute an independent y cutoff from the
-            # y detector size + y source extent (the y angular bandwidth is much
-            # narrower than x, so dy can be far coarser than dx).
+            # Retain the independent y requirement for diagnostics. Both
+            # backends currently propagate with a single circular cutoff.
             angles_y, max_y_list = compute_cutoff_angles(
                 detector_size=sim_params.get_detector_size_y(),
                 dx=sim_params.get_dy(),
@@ -1038,28 +1081,120 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
                 z_detector=sim_params.z_detector,
                 max_x=max_y,
             )
+            # Enclose both axes for the scalar cutoff and its ray-footprint
+            # estimate. Using only x silently discards y bandwidth and breaks
+            # x/y symmetry for off-axis sources.
+            angles, max_x_list = compute_cutoff_angles(
+                detector_size=max(
+                    sim_params.get_detector_size_x(),
+                    sim_params.get_detector_size_y(),
+                ),
+                dx=min(sim_params.dx, sim_params.get_dy()),
+                energy_range=energy_range,
+                z_source=z_source,
+                z_distances=z_distances,
+                element_heights=element_heights,
+                z_detector=sim_params.z_detector,
+                max_x=max(max_x, max_y),
+            )
+            max_y_list = list(max_x_list)
         else:
             angles_y, max_y_list = list(angles), list(max_x_list)
 
     if sim_params.is_2d:
-        # R1: the actual 2D circular cutoff uses kx^2 + ky^2 <= 2*f^2 when a
-        # single scalar angle is used for both axes.  The maximum component
-        # frequency is therefore sqrt(2)*f, which must stay below Nyquist.
-        wl_cut = convert_energy_wavelength(energy_range[1])
-        for a in angles:
-            f = np.sin(a) / wl_cut
-            if np.sqrt(2.0) * f > 0.5 / sim_params.dx:
-                raise ValueError(
-                    f"2D x-Nyquist cutoff exceeded: angle={a:.6f} rad, "
-                    f"max_freq={np.sqrt(2.0) * f:.6e}, nyquist={0.5 / sim_params.dx:.6e}"
+        if use_fresnel:
+            # Similarity modes sample the magnified field. The physical
+            # aperture angle is a carrier tilt, so raw-grid Nyquist is not the
+            # applicable acceptance criterion; audit the effective frame.
+            wl_cut = convert_energy_wavelength(energy_range[1])
+            dx_eff = float(sim_params.dx)
+            dy_eff = float(sim_params.get_dy())
+            fov_x = sim_params.nx * dx_eff
+            fov_y = sim_params.ny * dy_eff
+            det_eff_x = sim_params.get_detector_size_x() / fresnel_m
+            det_eff_y = sim_params.get_detector_size_y() / fresnel_m
+            px_eff_x = sim_params.detector_pixel_size_x / fresnel_m
+            px_eff_y = sim_params.detector_pixel_size_y / fresnel_m
+            nyq_freq = min(0.5 / dx_eff, 0.5 / dy_eff)
+            aperture_angle = float(
+                np.arctan(
+                    (
+                        sim_params.get_detector_size_x() / 2.0
+                        + max(map(abs, x_range))
+                    )
+                    / (sim_params.z_detector - z_source)
                 )
-        for a in angles_y:
-            f = np.sin(a) / wl_cut
-            if np.sqrt(2.0) * f > 0.5 / sim_params.get_dy():
+            )
+            if fov_x < det_eff_x or fov_y < det_eff_y:
                 raise ValueError(
-                    f"2D y-Nyquist cutoff exceeded: angle={a:.6f} rad, "
-                    f"max_freq={np.sqrt(2.0) * f:.6e}, nyquist={0.5 / sim_params.get_dy():.6e}"
+                    "Fresnel effective detector does not fit the wavefront grid: "
+                    f"detector/M = ({det_eff_x:.6e}, {det_eff_y:.6e}) m vs "
+                    f"wavefront FOV = ({fov_x:.6e}, {fov_y:.6e}) m"
                 )
+            fresnel_sampling = {
+                "units": "m",
+                "mode": "fresnel_similarity_effective_frame_v1",
+                "magnification": float(fresnel_m),
+                "effective_z": float(fresnel_z_eff),
+                "wavelength_m": float(wl_cut),
+                "wavefront_fov": [float(fov_x), float(fov_y)],
+                "detector_size_effective": [float(det_eff_x), float(det_eff_y)],
+                "detector_pixel_effective": [float(px_eff_x), float(px_eff_y)],
+                "detector_pixels_per_grid_point": [
+                    float(px_eff_x / dx_eff),
+                    float(px_eff_y / dy_eff),
+                ],
+                "detector_fov_to_wavefront_fov": [
+                    float(det_eff_x / fov_x),
+                    float(det_eff_y / fov_y),
+                ],
+                "raw_grid_nyquist_frequency": float(nyq_freq),
+                "physical_aperture_angle_rad": float(aperture_angle),
+                "physical_aperture_frequency": float(
+                    np.sin(aperture_angle) / wl_cut
+                ),
+                "raw_nyquist_check_applies": False,
+                "raw_nyquist_ratio_reported_only": float(
+                    np.sqrt(2.0) * np.sin(aperture_angle) / wl_cut / nyq_freq
+                ),
+            }
+            logger.info(
+                "Fresnel effective frame: detector/M=(%.4g, %.4g) m, "
+                "wavefront FOV=(%.4g, %.4g) m, eff. pixel=(%.4g, %.4g) m, "
+                "aperture angle=%.6f rad (raw-grid Nyquist check not "
+                "applicable, ratio %.3g reported)",
+                det_eff_x,
+                det_eff_y,
+                fov_x,
+                fov_y,
+                px_eff_x,
+                px_eff_y,
+                aperture_angle,
+                fresnel_sampling["raw_nyquist_ratio_reported_only"],
+            )
+        else:
+            fresnel_sampling = None
+            # The 2D circular cutoff uses kx^2 + ky^2 <= 2*f^2 when a single
+            # scalar angle is used. Validate that scalar against both axes.
+            wl_cut = convert_energy_wavelength(energy_range[1])
+            for a in angles:
+                f = np.sin(a) / wl_cut
+                if np.sqrt(2.0) * f > 0.5 / sim_params.dx:
+                    raise ValueError(
+                        f"2D x-Nyquist cutoff exceeded: angle={a:.6f} rad, "
+                        f"max_freq={np.sqrt(2.0) * f:.6e}, "
+                        f"nyquist={0.5 / sim_params.dx:.6e}"
+                    )
+            for a in angles:
+                f = np.sin(a) / wl_cut
+                if np.sqrt(2.0) * f > 0.5 / sim_params.get_dy():
+                    raise ValueError(
+                        f"2D y-Nyquist cutoff exceeded: angle={a:.6f} rad, "
+                        f"max_freq={np.sqrt(2.0) * f:.6e}, "
+                        f"nyquist={0.5 / sim_params.get_dy():.6e}"
+                    )
+    else:
+        fresnel_sampling = None
 
     # Maximal absolute x coordinate at z_detector where rays should appear according to the cutoff angles
     max_x = max_x_list[-1]
@@ -1117,7 +1252,23 @@ def setup_simulation(dct: config.DictType, config_dir: Path, save_dir: Path) -> 
             "max_x": max_x,
             "energy_range": energy_range,
             "source_points": source_points,
+            "source_sampling": {
+                "units": "m",
+                "distribution": "independent_gaussian_xy",
+                "range_convention": (
+                    "[mean - sigma, mean + sigma]; not hard bounds or FWHM"
+                ),
+                "seed": seed,
+                "x_mean": (x_range[0] + x_range[1]) / 2,
+                "x_sigma": (x_range[1] - x_range[0]) / 2,
+                "y_mean": (y_range[0] + y_range[1]) / 2,
+                "y_sigma": (y_range[1] - y_range[0]) / 2,
+                "y_range_explicit": "y_range" in multisource,
+            }
+            if multisource["type"] == "points"
+            else None,
             "fresnel_mode": fresnel_mode_name(sim_params),
+            "fresnel_sampling": fresnel_sampling,
             "fresnel_geometry": {
                 "version": (
                     "cone_beam_similarity_bpm_v1"

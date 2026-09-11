@@ -308,22 +308,56 @@ def validate(sim_dir):
                 y_source = max(abs(float(y_range[0])), abs(float(y_range[1])))
                 # Fresnel scaling initialises a plane wave (no spherical
                 # source->sample propagation), so the source->sample grid
-                # density check does not apply; the cutoff-angle Nyquist below
-                # still applies.
+                # density check does not apply.
                 if not use_fresnel:
                     grid_density_check_2d(
                         dz, x_source, nx, dx, y_source, ny, dy, wavelength
                     )
-                for angle in cutoff_angles:
-                    max_frequency = math.sqrt(2.0) * math.sin(angle) / wavelength
-                    if max_frequency > 0.5 / dx:
-                        raise ValueError("2D circular cutoff exceeds x-axis Nyquist")
-                # rectangular detector: the y cutoff angle is derived from the
-                # y detector size, not the x size.
-                for angle in (cutoff_angles_y or cutoff_angles):
-                    max_frequency = math.sqrt(2.0) * math.sin(angle) / wavelength
-                    if max_frequency > 0.5 / dy:
-                        raise ValueError("2D circular cutoff exceeds y-axis Nyquist")
+                    for angle in cutoff_angles:
+                        max_frequency = math.sqrt(2.0) * math.sin(angle) / wavelength
+                        if max_frequency > 0.5 / dx:
+                            raise ValueError("2D circular cutoff exceeds x-axis Nyquist")
+                    # rectangular detector: the y cutoff angle is derived from the
+                    # y detector size, not the x size.
+                    for angle in (cutoff_angles_y or cutoff_angles):
+                        max_frequency = math.sqrt(2.0) * math.sin(angle) / wavelength
+                        if max_frequency > 0.5 / dy:
+                            raise ValueError("2D circular cutoff exceeds y-axis Nyquist")
+                else:
+                    # Fresnel-similarity / cone-beam modes propagate the
+                    # *magnified* field: the aperture phase rides as a carrier
+                    # and the detector is downsampled with
+                    # detector_pixel_size / M.  The raw-grid Nyquist comparison
+                    # of the physical aperture angle is therefore not the
+                    # applicable criterion (it rejects geometrically
+                    # well-resolved layouts); the effective-frame criteria are
+                    # validated here instead, using the values recorded by the
+                    # generator in computed.yaml["fresnel_sampling"].
+                    fs = computed.get("fresnel_sampling")
+                    if not isinstance(fs, dict):
+                        raise ValueError(
+                            "Fresnel-scaled 2D run has no computed.yaml fresnel_sampling "
+                            "block; regenerate the simulation directory with the "
+                            "current generator so the effective-frame sampling "
+                            "criteria can be checked"
+                        )
+                    fov = [float(v) for v in fs.get("wavefront_fov", [0.0, 0.0])]
+                    det = [float(v) for v in fs.get("detector_size_effective", [0.0, 0.0])]
+                    px = [
+                        float(v)
+                        for v in fs.get("detector_pixel_effective", [dx, dy])
+                    ]
+                    if fov[0] < det[0] or fov[1] < det[1]:
+                        raise ValueError(
+                            "effective detector does not fit the wavefront FOV "
+                            f"(detector/M={det} m vs FOV={fov} m)"
+                        )
+                    if px[0] < dx or px[1] < dy:
+                        raise ValueError(
+                            "effective detector pixel is smaller than the wavefront grid "
+                            f"spacing (pixel/M={px} m vs dx,dy={dx},{dy} m)"
+                        )
+                    meta["fresnel_sampling"] = fs
             else:
                 if not use_fresnel:
                     grid_density_check(dz, x_source, points, dx, wavelength)

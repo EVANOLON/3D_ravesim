@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <spdlog/spdlog.h>
 
 #include "fft.hpp"
@@ -823,6 +824,9 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
         const PointSource &point_source =
             *reinterpret_cast<const PointSource *>(config.source.get());
         double y_source = point_source.y.value_or(0.0);
+        spdlog::info("2D point source: x={} m, y={} m, z={} m ({})",
+                     point_source.x, y_source, point_source.z,
+                     point_source.y ? "explicit" : "legacy_default_zero");
 
         if (config.sim_params.use_fresnel_scaling) {
             // Compute Fresnel parameters: z_eff and M
@@ -1081,6 +1085,22 @@ void run_simulation_inner_2d(const Config &config, const std::filesystem::path &
     // spdlog::info("[STEP 28] Saving detector output...");
     check_cuda_result("sync before saving detector output", cudaDeviceSynchronize());
     npypp::Save(sub_dir / "detected.npy", detector_output, {nr_phase_steps, nr_pixels_y, nr_pixels_x}, "w");
+    if (config.source->type == SourceType::Point) {
+        const auto &point = *static_cast<const PointSource *>(config.source.get());
+        YAML::Node geometry;
+        geometry["type"] = "point";
+        geometry["units"] = "m";
+        geometry["x"] = point.x;
+        geometry["y"] = point.y.value_or(0.0);
+        geometry["z"] = point.z;
+        geometry["y_origin"] = point.y ? "explicit" : "legacy_default_zero";
+        std::ofstream out(sub_dir / "source_geometry.yaml");
+        out << geometry << '\n';
+        out.close();
+        if (!out) {
+            throw std::runtime_error("Could not save source_geometry.yaml");
+        }
+    }
     // spdlog::info("[STEP 29] Save done");
 
     cudaFree(d_detector_output);

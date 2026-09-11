@@ -314,7 +314,8 @@ def cross_engine_config():
         },
         "runtime": {"big_wave": {
             "memory_budget_gb": 1.0, "chunk_size": "auto",
-            "fft2_backend": "scipy_in_memory", "detector_integrator": "legacy_fastwave",
+            # Current fastwave uses area-weighted detector integration.
+            "fft2_backend": "scipy_in_memory", "detector_integrator": "area_v1",
         }},
         "multisource": {
             "type": "points", "nr_source_points": 1,

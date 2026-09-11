@@ -6,6 +6,7 @@
 #include <plasma_physics.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <numeric>
 
@@ -745,6 +746,10 @@ parse_optical_elements(const YAML::Node &node, const DeltabetaTable &db_table,
     } else {
         s.y = std::nullopt;  // 1D仿真中没有y坐标
     }
+    if (!std::isfinite(s.x) || !std::isfinite(s.z) ||
+        (s.y && !std::isfinite(*s.y))) {
+        throw std::runtime_error("Point-source x/y/z coordinates must be finite");
+    }
     return s;
 }
 
@@ -817,6 +822,29 @@ std::string zeropad(int number, std::size_t length) {
 
     SimParams sim_params =
         parse_sim_params(config_node["sim_params"], convert_energy_wavelength(energy));
+    // Check prepared source metadata before loading potentially multi-GB grids.
+    if (sim_params.is_2d() &&
+        subconfig_node["source"]["type"].as<std::string>() == "point" &&
+        !subconfig_node["source"]["y"]) {
+        const auto y_range = config_node["multisource"]["y_range"];
+        if (y_range) {
+            if (!y_range.IsSequence() || y_range.size() != 2) {
+                throw std::runtime_error(
+                    "multisource.y_range must contain exactly two values");
+            }
+            if (y_range[0].as<double>() != 0.0 ||
+                y_range[1].as<double>() != 0.0) {
+                throw std::runtime_error(
+                    "2D subconfig source.y is missing but multisource.y_range is "
+                    "nonzero; regenerate the prepared simulation with explicit "
+                    "source.y values. Do not mix existing outputs with the "
+                    "regenerated source ensemble.");
+            }
+        }
+        spdlog::warn(
+            "2D source.y is absent; using legacy y=0 m "
+            "(no nonzero y_range requested)");
+    }
     const auto db_table = parse_deltabeta_table(subconfig_node["deltabeta_table"]);
     const auto plasma_optics = parse_plasma_optics_table(subconfig_node["plasma_optics_table"]);
     //test
