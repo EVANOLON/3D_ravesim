@@ -1,0 +1,48 @@
+
+sim_params:
+  is2d: 'true'
+  use_fresnel_scaling: false
+  use_cone_beam_bpm: false
+  N: 4194304
+  nx: 2048
+  ny: 2048
+  dx: 2e-07
+  dy: 2e-07
+  z_detector: 4.0
+  detector_size: 0.0002
+  detector_size_y: 0.0002
+  detector_pixel_size_x: 2e-07
+  detector_pixel_size_y: 2e-07
+  chunk_size: 4194304
+use_disk_vector: false
+save_debug_wavefields: false
+save_final_u_vectors: false
+dtype: c8
+multisource:
+  type: points
+  energy_range:
+    - 9999
+    - 10001
+  x_range:
+    - -1e-06
+    - 1e-06
+  y_range:
+    - -1e-06
+    - 1e-06
+  z: 0.0
+  nr_source_points: 50
+  seed: 1
+elements:
+  - type: sample
+    z_start: 1.0
+    pixel_size_x: 5e-08
+    pixel_size_y: 5e-08
+    pixel_size_z: 5e-08
+    grid_path: thin_c_plate_10um_25um.npy
+    materials:
+      -   - H
+          - 0.255
+    x_positions:
+      - 0
+    y_positions:
+      - 0

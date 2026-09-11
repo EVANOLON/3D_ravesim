@@ -1,0 +1,47 @@
+sim_params:
+  is2d: 'true'
+  use_fresnel_scaling: 'true'
+  use_cone_beam_bpm: true
+  N: 16777216
+  nx: 4096
+  ny: 4096
+  dx: 5e-07
+  z_detector: 0.104
+  detector_size: 0.04
+  detector_size_y: 0.04
+  detector_pixel_size_x: 4.8e-05
+  detector_pixel_size_y: 4.8e-05
+  chunk_size: 134217728
+use_disk_vector: false
+save_debug_wavefields: false
+save_final_u_vectors: false
+dtype: c8
+multisource:
+  type: points
+  energy_range:
+    - 1000
+    - 100001
+  x_range:
+    - -1e-06
+    - 1e-06
+  y_range:
+    - -1e-06
+    - 1e-06
+  z: 0.0
+  nr_source_points: 50
+  seed: 1
+  spectrum: /mnt/d/rave-sim-main/rave-sim-main/spectrum/spectrum_microX.h5
+elements:
+  - type: sample
+    z_start: 0.0035
+    pixel_size_x: 1e-06
+    pixel_size_y: 1e-06
+    pixel_size_z: 1e-06
+    grid_path: 500um_100um_shell_l1_m0_eps002_rot90.npy
+    materials:
+      -   - H
+          - 0.255
+    x_positions:
+      - 0
+    y_positions:
+      - 0

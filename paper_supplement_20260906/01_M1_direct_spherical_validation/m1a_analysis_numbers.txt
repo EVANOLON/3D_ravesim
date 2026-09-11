@@ -1,0 +1,12 @@
+raw mean-norm L2:
+  fson-cbbpm: 5.7104e-05
+  fsoff-fson: 4.0435e-02
+  fsoff-cbbpm: 4.0436e-02
+vacuum field (mean-norm):
+  fson: min 1.000 max 1.001 std 1.684e-04
+  fsoff: min 0.242 max 1.736 std 4.045e-02
+  cbbpm: min 1.000 max 1.001 std 1.678e-04
+contrast plate/vac L2:
+  fson-cbbpm: L2 5.7113e-05  max|d| 5.175e-04
+  fsoff-fson: L2 1.6557e-02  max|d| 6.724e+00
+  fsoff-cbbpm: L2 1.6557e-02  max|d| 6.724e+00

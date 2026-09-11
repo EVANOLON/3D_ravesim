@@ -1,0 +1,30 @@
+{
+  "shell_center_layers_measured": {
+    "perfect_1200": 599.5,
+    "l1_1224": 612.0,
+    "l2_1224": 612.0,
+    "varT_1206": 603.0,
+    "perfect_zalign_1224": 611.5,
+    "varT_zalign_1224": 612.0
+  },
+  "z_pixel_um": 1.0,
+  "z_start_m": 0.0035,
+  "aligned_center_depth_mm": {
+    "perfect_z": 4.1115,
+    "l1": 4.112,
+    "l2": 4.112,
+    "varT_z": 4.112
+  },
+  "original_grids": {
+    "perfect": "/mnt/d/rave-sim-main/rave-sim-main/grid/500um_100um_perfect_shell.npy",
+    "l1": "/mnt/d/rave-sim-main/rave-sim-main/grid/500um_100um_shell_l1_m0_eps002_rot90.npy",
+    "l2": "/mnt/d/rave-sim-main/rave-sim-main/grid/500um_100um_shell_l2_m0_eps002_rot90.npy",
+    "varT": "/mnt/d/rave-sim-main/rave-sim-main/grid/500um_100um_shell_l1_varT_er002_et005_rot90.npy"
+  },
+  "aligned_grids_dir": "/mnt/d/rave-sim-main/rave-sim-main/output/_agent_runs/align_full/grids",
+  "padded_shapes": {
+    "perfect_z": "(1224,1200,1200) front+12",
+    "varT_z": "(1224,1206,1206) front+9"
+  },
+  "fastwave_binary_era": "post fba9c5d (area kernel, 2026-09-02) + uncommitted source.y-explicit validation (2026-09-04); thin-plate outputs verified bit-identical old-vs-new kernel"
+}

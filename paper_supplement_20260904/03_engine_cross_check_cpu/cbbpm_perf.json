@@ -1,0 +1,31 @@
+{
+ "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop, 12 GB (12227 MiB)",
+ "driver": "573.22",
+ "precision": "c8 (complex64)",
+ "grid": "4096x4096 dx=500nm",
+ "Nz": 1200,
+ "detector": "833x833",
+ "fson": {
+  "compute_s": 51.9,
+  "wall_s": 115.2,
+  "per_layer_ms": 43.25,
+  "peak_vram_mib": 8477,
+  "note": "thin Fresnel scaling, measured 2026-09-03 with fixed area kernel"
+ },
+ "cbbpm": {
+  "compute_s": 52.6,
+  "wall_s": 113.2,
+  "per_layer_ms": 43.833333333333336,
+  "peak_vram_mib": 8425
+ },
+ "fson_50src_total_min_june": 72.7,
+ "cbbpm_per_source_med_s": {
+  "perfect": 250,
+  "l1_m0": 154,
+  "l2_m0": 147,
+  "varT": 122
+ },
+ "cpu_gpu_l2": 8.94e-05,
+ "cpu_case": "big-wave area_v1 l1varT dz4um 302layers source0",
+ "cpu_time_s": 567.5
+}
