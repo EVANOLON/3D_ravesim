@@ -1,6 +1,7 @@
 # RAVE-SIM: Really big/fast wAVE SIMulation
 
-[![DOI](https://img.shields.io/badge/DOI-10.1364%2FOE.543500-blue)](https://doi.org/10.1364/OE.543500)
+[![Software DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22727145.svg)](https://doi.org/10.5281/zenodo.22727145)
+[![Framework paper DOI](https://img.shields.io/badge/DOI-10.1364%2FOE.543500-blue)](https://doi.org/10.1364/OE.543500)
 ![GitHub last commit](https://img.shields.io/github/last-commit/EVANOLON/3D_ravesim)
 ![License](https://img.shields.io/github/license/EVANOLON/3D_ravesim)
 
@@ -137,6 +138,9 @@ jupyter lab notebooks/
 
 If you use this extended software in your research, cite the software release
 described in [`CITATION.cff`](CITATION.cff) and the original framework article:
+
+- All software versions: [10.5281/zenodo.22727145](https://doi.org/10.5281/zenodo.22727145)
+- Version `v2026.09.12`: [10.5281/zenodo.22727146](https://doi.org/10.5281/zenodo.22727146)
 
 ```bibtex
 @article{Spindler2025Simulation,

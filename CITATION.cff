@@ -12,6 +12,10 @@ version: 2026.09.12
 date-released: 2026-09-12
 repository-code: "https://github.com/EVANOLON/3D_ravesim"
 url: "https://github.com/EVANOLON/3D_ravesim"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22727145"
+    description: Concept DOI representing all RAVE-SIM software versions
 license: BSD-3-Clause
 abstract: >-
   An extended RAVE-SIM release with CUDA-accelerated two-dimensional wave-field
