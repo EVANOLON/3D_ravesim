@@ -54,7 +54,8 @@ In this documentation, **3D simulation** refers to propagating a two-dimensional
 │   └── CMakeLists.txt    #   CMake build configuration
 ├── grid/                 # Sample grid generation utilities
 ├── nist_lookup/          # Material properties database (δ, β lookup)
-├── notebooks/            # Jupyter example notebooks
+├── examples/             # Small supported examples
+├── notebooks/            # Jupyter research examples and legacy workflows
 ├── post-processing/      # Analysis scripts
 ├── CMakeLists.txt        # Convenience entry point forwarding to fast-wave/
 ├── Cargo.toml            # Rust workspace
@@ -109,7 +110,14 @@ python multisim.py config.yaml
 ```
 
 ### Notebooks
-Example notebooks are available in the `notebooks/` directory. Launch Jupyter:
+For a quick, data-free 2D XPCI run, start with:
+```bash
+python examples/minimal_xpci/run.py
+```
+
+Additional research and legacy notebooks are catalogued in
+[`notebooks/README.md`](notebooks/README.md). They are not all supported release
+entry points and some require external data or a CUDA build. Launch Jupyter with:
 ```bash
 jupyter lab notebooks/
 ```
