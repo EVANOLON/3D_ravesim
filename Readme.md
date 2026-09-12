@@ -4,7 +4,7 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/EVANOLON/3D_ravesim)
 ![License](https://img.shields.io/github/license/EVANOLON/3D_ravesim)
 
-RAVE-SIM is an X-ray wave propagation simulation framework originally developed at ETH Zurich and described in **Optics Express** ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings and samples) and free-space propagation to a detector. This repository extends the original framework with CUDA-accelerated 2D wave-field propagation, 3D voxelized samples, 2D area detectors, and plasma-sample modeling.
+RAVE-SIM is an X-ray wave propagation simulation framework originally developed at ETH Zurich and described in the 2025 **Optics Express** article *Simulation Framework for X-ray Grating Interferometry Optimization* ([DOI: 10.1364/OE.543500](https://doi.org/10.1364/OE.543500)). It simulates coherent X-rays traveling from a point source through optical elements (gratings and samples) and free-space propagation to a detector. This repository extends the original framework with CUDA-accelerated 2D wave-field propagation, 3D voxelized samples, 2D area detectors, and plasma-sample modeling.
 
 ## Extensions in This Repository
 
@@ -89,25 +89,36 @@ The spatial phase convention is `exp(+i·k·z)` (positive spatial phase), consis
 pip install -r requirements.txt
 ```
 
-### big-wave (Python)
+### Supported minimal example
+
+Run the data-free 2D XPCI example from the repository root:
+
 ```bash
-cd big-wave
-python main.py config.yaml
+python examples/minimal_xpci/run.py
 ```
 
-### fast-wave (CUDA GPU)
+This is the recommended first run. It uses the Python `big-wave` engine in
+memory, generates its sample data, validates the detector result, and writes
+ignored artifacts under `output/minimal_xpci/`.
+
+### fast-wave CUDA build
+
 ```bash
-cd fast-wave
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./build/fastwave <config_dir> --source_idx 0
+cmake -S fast-wave -B fast-wave/build-Release -DCMAKE_BUILD_TYPE=Release
+cmake --build fast-wave/build-Release
 ```
 
-### Multi-source simulation
+After building, compare the supported example across both engines:
+
 ```bash
-cd big-wave
-python multisim.py config.yaml
+python examples/minimal_xpci/compare_fast.py
 ```
+
+Lower-level production runs consume a prepared simulation directory containing
+`config.yaml`, `computed.yaml`, and per-source `subconfig.yaml` files. The
+`rave_agent` and `bridge` workflows prepare and validate those directories;
+`big-wave/main.py` is a source-level development demonstration, not a
+configuration-file command-line entry point.
 
 ### Notebooks
 For a quick, data-free 2D XPCI run, start with:
@@ -124,24 +135,31 @@ jupyter lab notebooks/
 
 ## Citation
 
-If you use this framework in your research, please cite:
+If you use this extended software in your research, cite the software release
+described in [`CITATION.cff`](CITATION.cff) and the original framework article:
 
 ```bibtex
-@article{Ravesim2024,
-  title={RAVE-SIM: Really big/fast wAVE SIMulation},
+@article{Spindler2025Simulation,
+  author={Spindler, Simon and Pereira, Alexandre and Sommer, Pascal and Rawlik, M. and Romano, L. and Stampanoni, Marco},
+  title={Simulation Framework for X-ray Grating Interferometry Optimization},
   journal={Optics Express},
+  volume={33},
+  number={1},
+  pages={1345},
   doi={10.1364/OE.543500},
-  year={2024},
-  author={Sommer, Pascal and Vieira Pereira, Alexandre and Spindler, Simon and others},
+  year={2025},
   publisher={Optica Publishing Group}
 }
 ```
 
 ## License
 
-Copyright (c) 2024, ETH Zurich. All rights reserved.
+The main RAVE-SIM code is distributed under the BSD 3-Clause License. Copyright
+(c) 2024, ETH Zurich.
 
-See the [LICENSE](LICENSE) file for details.
+See the [LICENSE](LICENSE) file for details. Bundled third-party components keep
+their own licenses; in particular, `nist_lookup/` is distributed under its
+included GNU GPL v3 license.
 
 ## Original Project and Related Publications
 

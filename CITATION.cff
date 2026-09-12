@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+message: >-
+  If you use this extended RAVE-SIM software, please cite this software release
+  and the framework article listed in the references.
+title: "RAVE-SIM: Really big/fast wAVE SIMulation"
+type: software
+authors:
+  - family-names: Fan
+    given-names: Sijie
+    orcid: "https://orcid.org/0009-0003-6263-1852"
+version: 2026.09.0
+date-released: 2026-09-12
+repository-code: "https://github.com/EVANOLON/3D_ravesim"
+url: "https://github.com/EVANOLON/3D_ravesim"
+license: BSD-3-Clause
+abstract: >-
+  An extended RAVE-SIM release with CUDA-accelerated two-dimensional wave-field
+  propagation, three-dimensional voxelized samples, two-dimensional
+  area-weighted detectors, plasma-sample modeling, cone-beam/Fresnel geometry,
+  and out-of-core two-dimensional FFT support.
+references:
+  - type: article
+    title: "Simulation Framework for X-ray Grating Interferometry Optimization"
+    authors:
+      - family-names: Spindler
+        given-names: Simon
+      - family-names: Pereira
+        given-names: Alexandre
+      - family-names: Sommer
+        given-names: Pascal
+      - family-names: Rawlik
+        given-names: M.
+      - family-names: Romano
+        given-names: L.
+      - family-names: Stampanoni
+        given-names: Marco
+    journal: Optics Express
+    year: 2025
+    volume: 33
+    issue: 1
+    start: 1345
+    doi: "10.1364/OE.543500"
+    publisher:
+      name: Optica Publishing Group
