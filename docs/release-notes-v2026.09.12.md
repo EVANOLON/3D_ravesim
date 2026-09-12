@@ -1,4 +1,4 @@
-# RAVE-SIM v2026.09.0
+# RAVE-SIM v2026.09.12
 
 This release consolidates the extended RAVE-SIM implementation for
 two-dimensional X-ray wave propagation, three-dimensional voxel samples,

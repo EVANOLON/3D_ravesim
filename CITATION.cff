@@ -8,7 +8,7 @@ authors:
   - family-names: Fan
     given-names: Sijie
     orcid: "https://orcid.org/0009-0003-6263-1852"
-version: 2026.09.0
+version: 2026.09.12
 date-released: 2026-09-12
 repository-code: "https://github.com/EVANOLON/3D_ravesim"
 url: "https://github.com/EVANOLON/3D_ravesim"
