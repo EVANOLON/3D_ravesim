@@ -74,3 +74,5 @@ rave-sim-260901.zip
 *.so
 *.dylib
 *.dll
+# Local paper-scale simulation datasets and generated outputs
+/paper_supplement_20260910_2d_spot/
