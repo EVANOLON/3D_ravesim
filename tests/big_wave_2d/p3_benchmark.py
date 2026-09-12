@@ -122,7 +122,7 @@ def main() -> None:
     parser.add_argument("--ny", type=int, default=4096)
     parser.add_argument("--dtype", choices=("c8", "c16"), default="c8")
     parser.add_argument(
-        "--integrator", choices=("legacy_fastwave", "area_v1"), default="legacy_fastwave"
+        "--integrator", choices=("legacy_fastwave", "area_v1"), default="area_v1"
     )
     parser.add_argument("--memory-budget-mib", type=int, default=32)
     parser.add_argument("--tile-rows", type=int, default=32)

@@ -346,5 +346,104 @@ class TestP3RuntimeIntegration(unittest.TestCase):
             self.assertFalse((sub_dir / "detected.npy.part").exists())
 
 
+class TestDetectorIntegratorDefault(unittest.TestCase):
+    """The default integrator must be the ratio-agnostic area_v1 path.
+
+    ``legacy_fastwave`` reproduces the historical, pre-area-weighted fast-wave
+    CUDA truncation count map. It remains an explicit opt-in for old-output
+    compatibility, never as a default.
+    """
+
+    def test_default_is_area_v1_at_every_layer(self):
+        self.assertEqual(config.DEFAULT_DETECTOR_INTEGRATOR, "area_v1")
+        self.assertEqual(
+            propagation.SimParams(
+                N=4,
+                dx=1e-6,
+                z_detector=1.0,
+                detector_size=1.0,
+                detector_pixel_size_x=1e-6,
+                detector_pixel_size_y=1e-6,
+                wl=1e-10,
+                chunk_size=4,
+            ).detector_integrator,
+            "area_v1",
+        )
+        # A config that never mentions the key must resolve to the default.
+        dct = p3_config("area_v1")
+        del dct["runtime"]["big_wave"]["detector_integrator"]
+        self.assertNotIn("detector_integrator", dct["sim_params"])
+        self.assertEqual(
+            config.resolve_sim_params(dct)["detector_integrator"], "area_v1"
+        )
+
+    def test_setup_simulation_records_area_v1_algorithm(self):
+        dct = p3_config("area_v1")
+        del dct["runtime"]["big_wave"]["detector_integrator"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sim_dir = multisim.setup_simulation(dct, root, root / "runs")
+            computed = config.load(sim_dir / "computed.yaml")
+            self.assertEqual(
+                computed["algorithms"]["detector_2d"]["version"],
+                "area_separable_stream_v1",
+            )
+            self.assertTrue(validate_sim.validate(sim_dir)["ok"])
+
+    def test_non_integer_ratio_blocks_legacy_but_allows_area_v1(self):
+        def ratio_check(integrator, pixel_size):
+            dct = p3_config(integrator, nx=64, ny=32)
+            dct["sim_params"]["dx"] = 1e-6
+            dct["sim_params"]["dy"] = 1e-6
+            dct["sim_params"]["detector_pixel_size_x"] = pixel_size
+            dct["sim_params"]["detector_pixel_size_y"] = pixel_size
+            dct["runtime"]["big_wave"]["detector_integrator"] = integrator
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                sim_dir = root / "sim"
+                sim_dir.mkdir()
+                resolved = copy.deepcopy(dct)
+                resolved["sim_params"] = config.resolve_sim_params(resolved)
+                config.save(sim_dir / "config.yaml", resolved)
+                config.save(
+                    sim_dir / "computed.yaml",
+                    {
+                        "cutoff_angles": [0.0],
+                        "max_x": 0.0,
+                        "energy_range": [0.0, 0.0],
+                        "source_points": [],
+                        "runtime": {
+                            "big_wave": {
+                                "resolved": {
+                                    key: resolved["sim_params"][key]
+                                    for key in (
+                                        "memory_budget_gb",
+                                        "chunk_size",
+                                        "fft2_backend",
+                                        "detector_integrator",
+                                    )
+                                }
+                            }
+                        },
+                    },
+                )
+                validation = validate_sim.validate(sim_dir)
+            names = {item["name"]: item for item in validation["checks"]}
+            self.assertIn("detector_integrator_pixel_ratio", names)
+            return names["detector_integrator_pixel_ratio"]
+
+        # 2.3529 is the ratio used by the production thin_w family.
+        non_integer = 2.3529e-6
+        legacy = ratio_check("legacy_fastwave", non_integer)
+        self.assertFalse(legacy["ok"], legacy)
+        self.assertIn("non-integer", legacy["detail"])
+        area = ratio_check("area_v1", non_integer)
+        self.assertTrue(area["ok"], area)
+
+        # An integer ratio passes this fractional-overlap compatibility check.
+        integer = ratio_check("legacy_fastwave", 4e-6)
+        self.assertTrue(integer["ok"], integer)
+
+
 if __name__ == "__main__":
     unittest.main()

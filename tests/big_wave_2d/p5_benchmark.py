@@ -344,7 +344,7 @@ def main() -> None:
     parser.add_argument("--ny", type=int, default=4096)
     parser.add_argument("--memory-budget-mib", type=int, default=512)
     parser.add_argument("--tile-rows", type=int, default=32)
-    parser.add_argument("--integrator", choices=("legacy_fastwave", "area_v1"), default="legacy_fastwave")
+    parser.add_argument("--integrator", choices=("legacy_fastwave", "area_v1"), default="area_v1")
     parser.add_argument(
         "--simulation-fov", type=float, default=0.0,
         help="fixed physical simulation width/height; zero keeps dx=2e-7",

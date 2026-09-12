@@ -295,6 +295,75 @@ def validate(sim_dir):
         )
     )
 
+    # ``legacy_fastwave`` reproduces the historical pre-area-weighted index map.
+    # A non-integer detector-pixel/grid ratio loses fractional overlap and can
+    # produce non-uniform counts. ``area_v1`` exactly integrates overlap for the
+    # piecewise-constant grid discretization; detector/domain coverage remains a
+    # separate concern for both paths.
+    if is_2d:
+        sampling = computed.get("fresnel_sampling")
+        ratio = None
+        ratio_source = "raw physical detector pixel / grid spacing"
+        if isinstance(sampling, dict):
+            try:
+                ratio = [float(v) for v in sampling["detector_pixels_per_grid_point"]]
+                ratio_source = "fresnel_sampling.detector_pixels_per_grid_point"
+            except (KeyError, TypeError, ValueError):
+                ratio = None
+        if ratio is None:
+            try:
+                ratio = [
+                    float(params.detector_pixel_size_x) / dx,
+                    float(params.detector_pixel_size_y) / dy,
+                ]
+            except (TypeError, ValueError, ZeroDivisionError):
+                ratio = None
+        if ratio is None:
+            checks.append(
+                check(
+                    "detector_integrator_pixel_ratio",
+                    True,
+                    "detector pixel/grid ratio unavailable; not checked",
+                )
+            )
+        else:
+            tol = 1e-9
+            non_integer = any(
+                abs(value - round(value)) > tol * max(1.0, abs(value)) for value in ratio
+            )
+            ratio_text = f"x={ratio[0]:.6g}, y={ratio[1]:.6g}"
+            if not non_integer:
+                checks.append(
+                    check(
+                        "detector_integrator_pixel_ratio",
+                        True,
+                        f"{ratio_text} integer; fractional-ratio check passed for "
+                        f"{detector_integrator} ({ratio_source}); detector/domain "
+                        "coverage is checked separately",
+                    )
+                )
+            elif detector_integrator == "legacy_fastwave":
+                checks.append(
+                    check(
+                        "detector_integrator_pixel_ratio",
+                        False,
+                        "legacy_fastwave with a non-integer detector pixel/grid ratio "
+                        f"({ratio_text}; {ratio_source}) loses fractional overlap and can "
+                        "produce non-uniform counts. Use detector_integrator: area_v1 "
+                        "(the default) for this geometry.",
+                    )
+                )
+            else:
+                checks.append(
+                    check(
+                        "detector_integrator_pixel_ratio",
+                        True,
+                        f"{ratio_text} non-integer; {detector_integrator} integrates the "
+                        "exact overlap for the piecewise-constant grid discretization "
+                        f"({ratio_source})",
+                    )
+                )
+
     try:
         if energy_range[1] > 0:
             wavelength = convert_energy_wavelength(energy_range[1])
@@ -610,7 +679,9 @@ def feasibility(sim_dir, engine="fast-wave"):
             detector_storage = "memory"
         detector_stage_name = (
             "legacy_detector_streaming"
-            if validation.get("detector_integrator", "legacy_fastwave")
+            if validation.get(
+                "detector_integrator", rave_config.DEFAULT_DETECTOR_INTEGRATOR
+            )
             == "legacy_fastwave"
             else "area_detector_streaming"
         )

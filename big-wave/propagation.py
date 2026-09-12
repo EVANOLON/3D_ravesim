@@ -46,7 +46,9 @@ class SimParams:
     # Runtime / provenance fields (not physics); kept on SimParams for plumbing.
     memory_budget_gb: float = 0.0
     fft2_backend: str = "scipy_in_memory"
-    detector_integrator: str = "legacy_fastwave"
+    # Keep in sync with config.DEFAULT_DETECTOR_INTEGRATOR: callers that build
+    # SimParams directly must get the same default as the config layer.
+    detector_integrator: str = "area_v1"
     use_fresnel_scaling: bool = False
     use_cone_beam_bpm: bool = False
     fresnel_magnification: float = field(default=1.0, init=False)
@@ -817,7 +819,7 @@ def _detector_geometry(
 def _legacy_index_ranges(
     out_n: int, grid_n: int, ds: float, spacing: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """CUDA-compatible truncation-toward-zero detector index ranges."""
+    """Historical CUDA truncation-toward-zero detector index ranges."""
     pixel = np.arange(out_n, dtype=np.float64)
     detector_position = (pixel - out_n // 2) * ds
     lo = (
@@ -865,7 +867,7 @@ def _legacy_fastwave_stream(
     if non_integer_x or non_integer_y:
         warnings.warn(
             "legacy_fastwave detector pixel/grid ratio is non-integer; "
-            "the CUDA-compatible count map can be non-uniform",
+            "the historical truncation count map can be non-uniform",
             RuntimeWarning,
             stacklevel=3,
         )
@@ -1113,8 +1115,9 @@ def square_and_downsample_2d(
 ) -> np.ndarray:
     """Stream a 2D field into the configured detector integration backend.
 
-    ``legacy_fastwave`` preserves fast-wave's integer truncation/count-map
-    semantics. ``area_v1`` integrates separable physical overlap areas. Both
+    ``legacy_fastwave`` preserves historical, pre-area-weighted fast-wave
+    truncation/count-map semantics. ``area_v1`` integrates separable physical
+    overlap areas and matches the current fast-wave CUDA detector. Both
     paths keep only a field-row tile plus the detector output in memory and
     apply the geometric cosine without an output-sized mesh grid.
     """

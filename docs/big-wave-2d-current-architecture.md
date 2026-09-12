@@ -1,6 +1,6 @@
 # Big-Wave 2D 当前实现架构（P5 验收后）
 
-> 更新日期：2026-08-19  
+> 更新日期：2026-09-12
 > 当前阶段：P0 配置/资源契约、P1 局部算子瓦片化、P2 核外 FFT2、P3 流式二维
 > detector、P4 History/兼容/检查点和 P5 科学/大规模验收已完成。  
 > 下一发布门：P6 DSH 运行工程化与 R2 生产数据全量验收。
@@ -58,8 +58,8 @@ flowchart TB
     W --> H["P4 History v2: RAM/HDF5 + ROI"]
     W --> K["P4 checkpoint: manifest + u/spectrum"]
     E --> T{"P3 detector integrator"}
-    T -->|"default"| L["legacy_fastwave streaming"]
-    T -->|"optional"| A["area_v1 streaming"]
+    T -->|"default"| A["area_v1 streaming"]
+    T -->|"optional, legacy compatibility"| L["legacy_fastwave streaming"]
     L --> O["atomic detected.npy + metadata"]
     A --> O
 ```
@@ -77,7 +77,7 @@ runtime:
     memory_budget_gb: 6.0
     chunk_size: auto
     fft2_backend: bfpy_ooc
-    detector_integrator: legacy_fastwave
+    detector_integrator: area_v1
 
 use_disk_vector: true
 sim_params:
@@ -236,10 +236,16 @@ scratch.npy.fft2.manifest       # pass 恢复点
 
 `square_and_downsample_2d` 根据 `detector_integrator` 分派：
 
-- `legacy_fastwave`（默认，`legacy_fastwave_stream_v1`）：保留 fast-wave CUDA 的像素中心、
-  截断趋零边界和 count-map 语义；
-- `area_v1`（可选，`area_separable_stream_v1`）：把波场网格单元视为分片常数，按与
-  detector pixel 的 x/y 重叠长度积分。
+- `area_v1`（默认，`area_separable_stream_v1`）：把波场网格单元视为分片常数，按与
+  detector pixel 的 x/y 重叠长度积分。对该离散模型的均匀场，逐像素结果与几何重叠
+  面积参考一致，并支持非整数 pixel/grid 比值；当前 fast-wave CUDA detector 使用相同
+  面积加权语义；
+- `legacy_fastwave`（可选，`legacy_fastwave_stream_v1`）：保留历史、面积加权修复前的
+  fast-wave CUDA 像素中心、截断趋零边界和 count-map 语义，仅供复现旧输出。非整数比值
+  下会丢失小数覆盖，并可能产生非均匀 count map（比值 2.3529 的指定均匀场测试中，相对
+  面积重叠参考的逐像素偏差最高达 66.6%）。因此
+  `validate_sim` 的 `detector_integrator_pixel_ratio` 检查会在"2D + 非整数比值 +
+  legacy_fastwave"时直接判为不可行。
 
 两个路径都按如下数据流运行：
 
@@ -306,8 +312,8 @@ wavesim 在 source 完成、每个 Sample/Plasma slice、元件完成和 detecto
 | Fresnel propagation/cutoff | P1 已实现 | 完整行 tile |
 | Sample 2D | P1 已实现 | mmap + tile 双线性插值 |
 | PlasmaSample 2D | P1 已实现 | mmap + vectorized δ/β |
-| legacy detector | P3 已实现 | CUDA 截断语义 + 流式 count-map |
-| area_v1 detector | P3 已实现，可选 | 可分离面积权重，默认不启用 |
+| legacy detector | P3 已实现，可选 | 历史 CUDA 截断语义 + 流式 count-map，仅用于旧输出兼容 |
+| area_v1 detector | P3 已实现，默认 | 分片常数离散模型的可分离重叠面积权重 |
 | History | P4 已实现 | `(z,y,x)`、HDF5/ROI/downsample、旧格式迁移 |
 | 运行 checkpoint | P4 已实现 | manifest/checksum，元件与 Sample/Plasma slice 恢复 |
 | 多源 y | P4 已实现 | 配置、Nyquist、subconfig/computed provenance |
@@ -332,7 +338,9 @@ wavesim 在 source 完成、每个 Sample/Plasma slice、元件完成和 detecto
 - P5 大规模入口：`tests/big_wave_2d/p5_benchmark.py`
 - P5 报告：`tests/big_wave_2d/P5_TEST_REPORT.md`
 
-P0–P5 聚合回归为 68/68。P5 还覆盖点源/倾斜平面波/薄层/Beer–Lambert/cutoff/矩孔、
+2026-08-19 的 P0–P5 阶段验收为 68/68；新增 detector 默认值回归后，P3 为 11/11。
+当前完整套件另有 1 个已确认存在于基线的 P0 失败，因此尚不声明新的聚合全通过数字。
+P5 还覆盖点源/倾斜平面波/薄层/Beer–Lambert/cutoff/矩孔、
 薄钨片、空心胶囊、Plasma 1D/2D 中心线和 fast-wave 交叉验证；偏移点源 detector 的跨引擎
 相对 L2 为 `2.278e-7`。
 

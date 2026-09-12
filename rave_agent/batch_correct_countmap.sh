@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Batch-run correct_countmap.py over every timestep (000000NN) of a RAVE-SIM run.
+# Batch-correct historical, pre-area-weighted fast-wave outputs.
 #
 # Usage: batch_correct_countmap.sh <sim_dir> [extra correct_countmap.py args...]
+# The wrapper supplies --legacy-output; verify provenance before running it.
 #
 # Skips timesteps whose detected_corrected.npy is already newer than detected.npy.
 # All output is appended to <sim_dir>/batch_correct.log.
@@ -32,7 +33,7 @@ for d in "$SIM_DIR"/000000*/; do
   fi
 
   echo "[$ts] correcting..." | tee -a "$LOG"
-  if python "$SCRIPT" --sim_dir "$SIM_DIR" --path "$det" "$@" >> "$LOG" 2>&1; then
+  if python "$SCRIPT" --legacy-output --sim_dir "$SIM_DIR" --path "$det" "$@" >> "$LOG" 2>&1; then
     echo "[$ts] OK -> $corr" | tee -a "$LOG"
     done=$((done+1))
   else

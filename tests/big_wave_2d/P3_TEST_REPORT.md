@@ -1,19 +1,26 @@
 # big-wave 2D P3 验收记录
 
-日期：2026-08-19
+原始验收日期：2026-08-19
+默认值迁移更新：2026-09-12
 
 ## 结论
 
 P3 已完成。`square_and_downsample_2d` 不再创建整场 float64 强度、二维前缀和或
-`meshgrid`。默认 `legacy_fastwave` 保留 fast-wave CUDA 的像素中心与整数截断边界；
-可选 `area_v1` 使用可分离的网格单元/探测器像素重叠面积。
+`meshgrid`。默认 `area_v1` 使用可分离的网格单元/探测器像素重叠面积；可选
+`legacy_fastwave` 保留历史、面积加权修复前的 fast-wave CUDA 像素中心与整数截断边界，
+仅用于复现旧输出；当前 fast-wave CUDA 使用与 `area_v1` 对齐的面积加权积分。
+
+> 更新：默认值已由 `legacy_fastwave` 改为 `area_v1`。`legacy_fastwave` 的截断 count map
+> 只在 detector pixel 为网格间距整数倍时均匀；非整数比值（例如生产配置常见的 2.3529）
+> 下，在指定均匀场测试中相对面积重叠参考的逐像素偏差最高达 66.6%。`validate_sim` 现以
+> `detector_integrator_pixel_ratio` 检查拦截"2D + 非整数比值 + legacy_fastwave"。
 
 两种积分器均按完整行 tile 读取 `Vector`，只保留当前行强度、一维 x 前缀和、活动
 detector 行和输出。余弦几何因子融合到逐行累加，避免第二次全输出扫描。
 
 ## 实现范围
 
-- `detector_integrator` 支持 `legacy_fastwave`（默认）和 `area_v1`；
+- `detector_integrator` 支持 `area_v1`（默认）和 `legacy_fastwave`；
 - detector 输出超过 `memory_budget_gb` 时自动使用临时 NPY memmap；
 - 新建 memmap 利用稀疏零页，不预触碰完整输出；
 - 单相位 memmap 通过等长 NPY header 改写和原子重命名提交为 `detected.npy`；
@@ -30,7 +37,7 @@ detector 行和输出。余弦几何因子融合到逐行累加，避免第二�
 
 `tests/big_wave_2d/test_p3.py` 覆盖：
 
-1. `legacy_fastwave` 对照直接 CUDA 语义循环；
+1. `legacy_fastwave` 对照历史 CUDA 截断语义参考循环；
 2. 禁止整场强度和二维前缀和分配；
 3. 非整数像素比与零计数告警/metadata；
 4. `area_v1` 对照暴力重叠面积积分；
@@ -44,7 +51,7 @@ detector 行和输出。余弦几何因子融合到逐行累加，避免第二�
 | P0 配置/资源门 | 17/17 通过 |
 | P1 局部算子 | 11/11 通过 |
 | P2 OOC FFT2 | 11/11 通过 |
-| P3 流式 detector | 8/8 通过 |
+| P3 流式 detector | 11/11 通过 |
 | `test_2d_simulation.py` | 4/4 通过 |
 
 原有 `big-wave/test.py` 为 26/28；仍是 P2 前已存在的两个失败：
@@ -69,6 +76,6 @@ detector 行和输出。余弦几何因子融合到逐行累加，避免第二�
 
 ## 剩余边界
 
-P3 解除了完整 detector 帧的整场强度/前缀和峰值。尚未执行 16384² 完整成像验收，
-原因是 History 仍把多帧保存在 Python list，phase stepping 多输出的生命周期和 canonical
-轴序也属于 P4。下一发布门是 P4，而不是继续修改 detector 数值语义。
+原始 P3 验收时尚未执行 16384² 完整成像，后续 History、phase stepping 多输出生命周期和
+canonical 轴序已在 P4 阶段继续处理。本报告保留原阶段性能数据；2026-09-12 的更新仅记录
+detector 默认值迁移、兼容语义和新增回归测试。

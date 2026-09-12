@@ -25,7 +25,12 @@ DEFAULT_MEMORY_BUDGET_GB = 6.0
 DEFAULT_FFT2_BACKEND = "scipy_in_memory"
 OOC_FFT2_BACKEND = "bfpy_ooc"
 FFT2_BACKENDS = {DEFAULT_FFT2_BACKEND, OOC_FFT2_BACKEND}
-DEFAULT_DETECTOR_INTEGRATOR = "legacy_fastwave"
+# ``area_v1`` exactly integrates the separable grid-cell/detector-pixel overlap
+# for the piecewise-constant discretization and matches the current fast-wave
+# CUDA detector. ``legacy_fastwave`` reproduces the historical, pre-area-weighted
+# CUDA truncation/count-map semantics for old-output compatibility only. See
+# validate_sim's ``detector_integrator_pixel_ratio`` check.
+DEFAULT_DETECTOR_INTEGRATOR = "area_v1"
 DETECTOR_INTEGRATORS = set(propagation.DETECTOR_INTEGRATOR_VERSIONS)
 DEFAULT_SAVE_DEBUG_WAVEFIELDS = False
 MAX_AUTO_TILE_ROWS_2D = 256

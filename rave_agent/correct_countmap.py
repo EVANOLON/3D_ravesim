@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Correct the detector downsampling "count-map" ripple in fastwave 2D detected.npy.
+Correct the detector downsampling "count-map" ripple in historical fast-wave 2D
+outputs created before the CUDA area-weighting fix.
 
-fastwave's square_and_downsample_2d_kernel (fast-wave/fwcuda/kernels.cu:517)
-integrates |u|^2 over an integer-truncated range of grid points per detector
+The historical square_and_downsample_2d_kernel integrated |u|^2 over an
+integer-truncated range of grid points per detector
 pixel. When the effective detector pixel (detector_pixel_size / M) is not an
 integer multiple of the grid spacing dx, the number of covered grid points
 alternates (e.g. 6/7/8 for the 4096->416 capsule runs), imprinting a periodic
@@ -21,7 +22,7 @@ count map, and divides it out:
 then renormalizes to the original image mean so the intensity scale is kept.
 
 Usage:
-  python correct_countmap.py --sim_dir <sim_dir> [--path <detected.npy>]
+  python correct_countmap.py --legacy-output --sim_dir <sim_dir> [--path <detected.npy>]
                              [--out <out.npy>] [--obliquity] [--no-renorm]
 """
 import argparse
@@ -118,6 +119,11 @@ def ripple_stats(img):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        '--legacy-output',
+        action='store_true',
+        help='confirm that the input was produced by the historical truncation kernel',
+    )
     ap.add_argument('--sim_dir', required=True)
     ap.add_argument('--path', default=None, help='detected.npy; default <sim_dir>/00000000/detected.npy')
     ap.add_argument('--out', default=None, help='output npy; default <dir>/detected_corrected.npy')
@@ -127,6 +133,12 @@ def main():
                     help='fill count==0 pixels (empty integration range, e.g. the '
                          'center zero-cross) from the 8-neighbourhood mean')
     args = ap.parse_args()
+
+    if not args.legacy_output:
+        ap.error(
+            'this correction is only for historical pre-area-weighted fast-wave '
+            'outputs; pass --legacy-output after confirming the input provenance'
+        )
 
     cfg = load_config(args.sim_dir)
     cm = compute_count_map(cfg)
