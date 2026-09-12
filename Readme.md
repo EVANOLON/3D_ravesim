@@ -56,7 +56,7 @@ In this documentation, **3D simulation** refers to propagating a two-dimensional
 ├── nist_lookup/          # Material properties database (δ, β lookup)
 ├── notebooks/            # Jupyter example notebooks
 ├── post-processing/      # Analysis scripts
-├── CMakeLists.txt        # fast-wave build (root symlink)
+├── CMakeLists.txt        # Convenience entry point forwarding to fast-wave/
 ├── Cargo.toml            # Rust workspace
 └── requirements.txt      # Python dependencies
 ```

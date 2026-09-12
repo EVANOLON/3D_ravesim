@@ -119,7 +119,7 @@ elif dct["type"] == "plasma_sample":
 
 ---
 
-## 3. C++-side Changes (`fast-wave - 260428 3d版本/`)
+## 3. C++-side Changes (`fast-wave/`)
 
 ### 3.1 New struct: `PlasmaSample` (`include/optical_element.hpp`)
 
